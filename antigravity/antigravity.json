@@ -2,13 +2,19 @@
   "mcpServers": {
     "c64u-bridge": {
       "command": "uv",
-      "args": ["run", "c64u-bridge", "mcp"],
+      "args": [
+        "run",
+        "--no-sync",
+        "--directory",
+        "C:\\Users\\asten\\OneDrive\\Documents\\Python\\pythonProject\\c64u-antigravity-bridge",
+        "c64u-bridge",
+        "mcp"
+      ],
       "env": {
-        "C64U_HOST": "192.168.1.64",
+        "C64U_HOST": "172.16.4.64",
         "C64U_PORT": "80",
-        "KICKASS_JAR": "/usr/local/bin/KickAss.jar",
-        "ACME_BIN": "/usr/local/bin/acme",
-        "CC65_BIN": "/usr/local/bin/cl65"
+        "KICKASS_JAR": "C:\\Users\\asten\\OneDrive\\Documents\\Python\\pythonProject\\c64u-antigravity-bridge\\tools\\kickassembler\\KickAss.jar",
+        "C64U_PASSWORD": ""
       }
     }
   }

@@ -62,9 +62,29 @@ Write 6502/6510 Assembly, C, or Commodore BASIC in Antigravity with AI assistanc
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### 1. Interactive Automated Setup (Recommended)
 
-Clone the repository and install the bridge using `uv`:
+Run the interactive setup wizard, which prompts for your C64U network address, automatically downloads and installs **KickAssembler**, sets up your Python virtual environment and CLI in editable mode, generates configuration files (`.env` and `antigravity/antigravity.json`), and tests connectivity:
+
+**On Windows (PowerShell / Command Prompt):**
+```powershell
+.\setup.ps1
+# or
+.\setup.bat
+```
+
+**Cross-Platform (Python):**
+```bash
+python setup_bridge.py
+```
+
+*Flags supported for non-interactive / CI runs:* `python setup_bridge.py --yes --host 192.168.1.64`
+
+---
+
+### 2. Manual Installation (Alternative)
+
+If you prefer manual configuration:
 
 ```bash
 git clone https://github.com/<your-username>/c64u-antigravity-bridge.git
@@ -76,14 +96,14 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 uv pip install -e .
 ```
 
-### 2. Environment Configuration
-
-Set the IP address of your C64 Ultimate (found under the C64U menu: `Commodore + RESTORE` -> `F1` -> `Network Settings`):
+Configure your environment variables or create a `.env` file in the project root:
 
 ```bash
-export C64U_HOST="192.168.1.64"   # Replace with your C64U IP
-export C64U_PORT="80"
-# export C64U_PASSWORD="secret"    # Optional if password enabled
+# .env file or shell exports:
+C64U_HOST="192.168.1.64"   # Replace with your C64U IP (Commodore+RESTORE -> F1 -> Network)
+C64U_PORT="80"
+# C64U_PASSWORD="secret"    # Optional if password enabled
+KICKASS_JAR="tools/kickassembler/KickAss.jar"
 ```
 
 ---
@@ -126,13 +146,67 @@ Copy the rule guide from `antigravity/rules.md` into your Antigravity workspace 
 
 ---
 
+## 🎨 Python-to-6502 Assembly Studio (Textual TUI)
+
+`c64u-bridge` includes a full-featured retro terminal IDE powered by **[Textual](https://textual.textualize.io/)**. Write high-level Python code targeting the MOS 6502, view real-time transpiled assembly and AST hierarchy, assemble binaries, and DMA-deploy directly to your physical Commodore 64 with a single keystroke (`F5`).
+
+Launch the interactive TUI:
+```bash
+c64u-bridge tui      # or: c64u-py2asm
+```
+
+### Key TUI Features:
+* **Python Editor**: Syntax highlighting, line numbers, and instant AST parsing.
+* **Live 6502 Assembly Tab**: Inspect generated KickAssembler or ACME code.
+* **Compiler & Build Log**: Color-coded output from transpilation and KickAssembler builds.
+* **AST & Symbol Tree**: Explore parsed syntax nodes and memory variable allocation.
+* **C64U Hardware Tab**: Connection status, machine control (Reset, Pause, Resume), and direct POKE/PEEK memory tester.
+* **One-Touch DMA Run (`F5`)**: Transpiles Python, assembles to `.prg`, and DMA runs on the C64U in under 500ms!
+* **Built-in Demos (`F2`)**: Ready-to-run examples (Rainbow Raster Bars, Screen Matrix Fill, Hello World & Border Flash, SID Synth Chime).
+
+### Python Dialect & C64 Intrinsics:
+```python
+# Sample: Rainbow Raster Bars
+while True:
+    wait_raster(50)
+    border_color(COLOR_RED)
+    wait_raster(90)
+    border_color(COLOR_YELLOW)
+    wait_raster(130)
+    border_color(COLOR_BLUE)
+```
+
+Supported intrinsics:
+* `poke(addr, val)` / `peek(addr)`: Direct 8-bit memory manipulation.
+* `border_color(color)` / `background_color(color)`: VIC-II palette registers (`$D020`/`$D021`).
+* `wait_raster(line)`: Synchronize execution with the CRT beam line (`$D012`).
+* `clear_screen(char, color)`: Clear Screen RAM (`$0400`) and Color RAM (`$D800`).
+* `print_str("...")` / `print_char(c)`: Output text using KERNAL `CHROUT` (`$FFD2`).
+* `sid_tone(freq, waveform, ad, sr)`: Configure SID voice 1 tone generator.
+* `delay(cycles)`: Cycle delay loop.
+* `asm("...")`: Verbatim 6502 assembly embedding.
+
+---
+
 ## 💻 Standalone CLI Usage
 
-You can also use `c64u-bridge` directly from the command line:
+You can also use `c64u-bridge` directly from the command line (or use the root `./c64u-bridge` / `.\c64u-bridge` launchers on Windows/PowerShell):
 
 ```bash
+# Launch the interactive Textual TUI
+c64u-bridge tui
+
+# Transpile a Python script to KickAssembler .asm
+c64u-bridge transpile examples/rainbow_border.py
+
+# Transpile, assemble to .prg, and immediately DMA run on C64U
+c64u-bridge transpile examples/rainbow_border.py --assemble --run
+
+# Directly run a Python file (auto-transpiles, compiles, and DMA executes)
+c64u-bridge run examples/rainbow_border.py
+
 # Check C64U status
-c64u-bridge status
+c64u-bridge status   # (or .\c64u-bridge status)
 
 # Compile and run an assembly file
 c64u-bridge run examples/hello_world.asm

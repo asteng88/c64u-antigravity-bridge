@@ -38,6 +38,7 @@ classifiers = [
 dependencies = [
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
+    "textual>=8.0.0",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +50,7 @@ dev = [
 [project.scripts]
 c64u-bridge = "c64u_bridge.cli:main"
 c64u-mcp = "c64u_bridge.server:main"
+c64u-py2asm = "c64u_bridge.tui:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/c64u_bridge"]

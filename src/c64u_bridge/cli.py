@@ -27,8 +27,19 @@ def main():
 
     # Command: run (build and execute)
     run_parser = subparsers.add_parser("run", help="Compile and DMA run source file or binary on C64U")
-    run_parser.add_argument("file", help="Path to .asm, .s, .c, or .prg file")
+    run_parser.add_argument("file", help="Path to .py, .asm, .s, .c, or .prg file")
     run_parser.add_argument("--assembler", choices=["auto", "kickass", "acme", "cc65"], default="auto")
+
+    # Command: transpile (Python to 6502 asm)
+    trans_parser = subparsers.add_parser("transpile", help="Convert Python source to MOS 6502 assembly")
+    trans_parser.add_argument("file", help="Path to input Python file (.py)")
+    trans_parser.add_argument("-o", "--output", help="Path to output .asm file")
+    trans_parser.add_argument("--assembler", choices=["kickass", "acme"], default="kickass")
+    trans_parser.add_argument("--assemble", action="store_true", help="Also assemble to PRG using KickAssembler")
+    trans_parser.add_argument("--run", action="store_true", help="DMA execute immediately on C64U")
+
+    # Command: tui (interactive Textual IDE)
+    subparsers.add_parser("tui", help="Launch interactive Textual TUI for Python-to-Assembly development")
 
     # Command: screen (dump screen buffer)
     screen_parser = subparsers.add_parser("screen", help="Inspect and display C64 screen memory ($0400-$07E7)")
@@ -64,6 +75,44 @@ def main():
         run_stdio_server()
         return
 
+    if args.command == "tui":
+        from .tui import main as run_tui
+        run_tui()
+        return
+
+    if args.command == "transpile":
+        from .transpiler import PythonTo6502Transpiler, TranspileOptions
+        src_path = Path(args.file)
+        if not src_path.exists():
+            print(f"Error: File not found: {src_path}", file=sys.stderr)
+            sys.exit(1)
+        source_code = src_path.read_text(encoding="utf-8")
+        out_path = Path(args.output) if args.output else src_path.with_suffix(".asm")
+        opts = TranspileOptions(assembler=args.assembler, prg_name=out_path.with_suffix(".prg").name)
+        transpiler = PythonTo6502Transpiler(opts)
+        result = transpiler.transpile(source_code)
+        if not result.success:
+            print("Transpilation failed:", file=sys.stderr)
+            for err in result.errors:
+                print(f"  {err}", file=sys.stderr)
+            sys.exit(1)
+        out_path.write_text(result.assembly, encoding="utf-8")
+        print(f"Transpiled {src_path.name} -> {out_path} ({len(result.assembly.splitlines())} lines asm)")
+
+        if args.assemble or args.run:
+            compiler = CrossCompiler()
+            comp_res = compiler.compile(out_path, assembler=args.assembler)
+            if not comp_res.success:
+                print(f"Assembly failed:\n{comp_res.error_message or comp_res.stderr or comp_res.stdout}", file=sys.stderr)
+                sys.exit(1)
+            print(f"Assembled: {comp_res.output_prg}")
+            if args.run:
+                client = C64UClient(host=args.host, port=args.port, password=args.password)
+                print(f"Deploying {comp_res.output_prg.name} to C64U via DMA...")
+                res = client.run_prg(comp_res.output_prg)
+                print(f"DMA Run Success: {res}")
+        return
+
     client = C64UClient(host=args.host, port=args.port, password=args.password)
     compiler = CrossCompiler()
 
@@ -77,6 +126,28 @@ def main():
             if path.suffix.lower() == ".prg":
                 print(f"Uploading and running {path.name}...")
                 res = client.run_prg(path)
+                print(f"Success: {res}")
+            elif path.suffix.lower() == ".py":
+                from .transpiler import PythonTo6502Transpiler, TranspileOptions
+                print(f"Transpiling Python {path.name} to 6502 assembly...")
+                asm_path = path.with_suffix(".asm")
+                prg_path = path.with_suffix(".prg")
+                opts = TranspileOptions(prg_name=prg_path.name)
+                transpiler = PythonTo6502Transpiler(opts)
+                trans_res = transpiler.transpile(path.read_text(encoding="utf-8"))
+                if not trans_res.success:
+                    print("Transpilation failed:", file=sys.stderr)
+                    for err in trans_res.errors:
+                        print(f"  {err}", file=sys.stderr)
+                    sys.exit(1)
+                asm_path.write_text(trans_res.assembly, encoding="utf-8")
+                print(f"Compiling {asm_path.name} with KickAssembler...")
+                comp_res = compiler.compile(asm_path, output_prg=prg_path, assembler="kickass")
+                if not comp_res.success:
+                    print(f"Assembly failed:\n{comp_res.error_message or comp_res.stderr or comp_res.stdout}", file=sys.stderr)
+                    sys.exit(1)
+                print(f"Build successful ({prg_path.name}). Deploying to C64U via DMA...")
+                res = client.run_prg(prg_path)
                 print(f"Success: {res}")
             else:
                 print(f"Compiling {path.name} with {args.assembler}...")

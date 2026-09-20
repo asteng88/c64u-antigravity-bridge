@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import List, Optional
 
 
+from .env import find_default_kickass_jar, load_env
+
+# Ensure .env is loaded
+load_env()
+
+
 @dataclass
 class CompilationResult:
     success: bool
@@ -32,7 +38,9 @@ class CrossCompiler:
         acme_bin: Optional[str] = None,
         cc65_bin: Optional[str] = None,
     ):
-        self.kickass_jar = kickass_jar or os.getenv("KICKASS_JAR", "KickAss.jar")
+        detected_jar = find_default_kickass_jar()
+        default_jar = str(detected_jar) if detected_jar else "KickAss.jar"
+        self.kickass_jar = kickass_jar or os.getenv("KICKASS_JAR") or default_jar
         self.acme_bin = acme_bin or os.getenv("ACME_BIN", "acme")
         self.cc65_bin = cc65_bin or os.getenv("CC65_BIN", "cl65")
 

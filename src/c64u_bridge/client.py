@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 import httpx
 
+from .env import load_env
+
+# Ensure .env is loaded
+load_env()
+
 
 class C64UClientError(Exception):
     """Base exception for C64U client operations."""
@@ -22,7 +27,7 @@ class C64UClient:
     def __init__(
         self,
         host: Optional[str] = None,
-        port: int = 80,
+        port: Optional[int] = None,
         password: Optional[str] = None,
         timeout: float = 10.0,
     ):
@@ -36,7 +41,12 @@ class C64UClient:
             timeout: Request timeout in seconds.
         """
         self.host = host or os.getenv("C64U_HOST", "c64u.local")
-        self.port = int(os.getenv("C64U_PORT", str(port)))
+        if port is not None:
+            self.port = port
+        elif os.getenv("C64U_PORT"):
+            self.port = int(os.environ["C64U_PORT"])
+        else:
+            self.port = 80
         self.password = password or os.getenv("C64U_PASSWORD")
         self.timeout = timeout
         self.base_url = f"http://{self.host}:{self.port}/v1"

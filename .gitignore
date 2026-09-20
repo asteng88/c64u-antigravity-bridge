@@ -45,3 +45,7 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+
+# Downloaded tools & archives
+tools/
+*.zip
