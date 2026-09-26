@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>C64U Retro Sprite Studio — Multicolor VIC-II 6502 Assembly Generator</title>
+    <style>
+        :root {
+            --bg-dark: #0f111a;
+            --bg-panel: #161a29;
+            --bg-card: #1f2438;
+            --c64-blue: #352879;
+            --c64-ltblue: #70a4b2;
+            --c64-green: #6cbe45;
+            --c64-yellow: #e4e97a;
+            --border-color: #2b324f;
+            --text-main: #e2e8f0;
+            --text-dim: #94a3b8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            background: var(--bg-panel);
+            border-bottom: 2px solid var(--c64-blue);
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .c64-badge {
+            background: var(--c64-blue);
+            color: var(--c64-yellow);
+            font-weight: bold;
+            font-family: monospace;
+            padding: 3px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--c64-ltblue);
+            font-size: 14px;
+            letter-spacing: 1px;
+        }
+
+        h1 {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-main);
+        }
+
+        .hardware-target {
+            color: var(--c64-ltblue);
+            font-size: 12px;
+            font-family: monospace;
+        }
+
+        .main-workspace {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* ================= Left Hand Side: Canvas & Tools ================= */
+        .lhs-panel {
+            width: 58%;
+            border-right: 2px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-dark);
+            overflow-y: auto;
+        }
+
+        .toolbar {
+            background: var(--bg-panel);
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .tool-group {
+            display: flex;
+            gap: 4px;
+            background: var(--bg-card);
+            padding: 3px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        button {
+            background: var(--bg-card);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.15s ease;
+        }
+
+        button:hover:not(:disabled) {
+            background: #2a3250;
+            border-color: var(--c64-ltblue);
+        }
+
+        button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+
+        button.active {
+            background: var(--c64-blue);
+            border-color: var(--c64-yellow);
+            color: #ffffff;
+            box-shadow: 0 0 8px rgba(112, 164, 178, 0.4);
+        }
+
+        button.btn-accent {
+            background: #1b6438;
+            border-color: #2ea043;
+            color: #ffffff;
+        }
+        button.btn-accent:hover {
+            background: #238636;
+        }
+
+        button.btn-special {
+            background: #6e40c9;
+            border-color: #8957e5;
+            color: #ffffff;
+        }
+        button.btn-special:hover {
+            background: #8957e5;
+        }
+
+        .canvas-container {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 14px;
+            position: relative;
+            background: radial-gradient(circle at center, #181d2f 0%, #0d0f17 100%);
+        }
+
+        #spriteCanvas {
+            image-rendering: pixelated;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+            border: 2px solid #3b4261;
+            cursor: crosshair;
+        }
+
+        .palette-section {
+            background: var(--bg-panel);
+            border-top: 1px solid var(--border-color);
+            padding: 10px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .slot-bar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            background: #0d1117;
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        .slot-title {
+            font-size: 11px;
+            font-weight: bold;
+            color: var(--c64-yellow);
+            font-family: monospace;
+            text-transform: uppercase;
+        }
+
+        .slot-btn {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            background: #1f2438;
+            color: #ffffff;
+            font-size: 11px;
+            font-family: monospace;
+        }
+
+        .slot-btn:hover {
+            border-color: var(--c64-ltblue);
+        }
+
+        .slot-btn.active {
+            border-color: var(--c64-yellow);
+            box-shadow: 0 0 8px rgba(228, 233, 122, 0.5);
+            background: #2a3250;
+        }
+
+        .slot-left-area {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .slot-swatch-preview {
+            width: 16px;
+            height: 16px;
+            border-radius: 3px;
+            border: 1px solid #ffffff;
+        }
+
+        .palette-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--c64-ltblue);
+        }
+
+        .swatch-grid {
+            display: grid;
+            grid-template-columns: repeat(16, 1fr);
+            gap: 4px;
+        }
+
+        .swatch {
+            aspect-ratio: 1 / 1;
+            border-radius: 3px;
+            border: 2px solid transparent;
+            cursor: pointer;
+            position: relative;
+            transition: transform 0.1s ease;
+        }
+
+        .swatch:hover {
+            transform: scale(1.18);
+            z-index: 2;
+            border-color: #ffffff;
+        }
+
+        .swatch.selected {
+            border-color: #ffffff;
+            box-shadow: 0 0 6px #ffffff;
+            transform: scale(1.12);
+        }
+
+        /* ================= Right Hand Side: Code & Preview ================= */
+        .rhs-panel {
+            width: 42%;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-panel);
+        }
+
+        .rhs-header {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .rhs-header h2 {
+            font-size: 13px;
+            color: var(--c64-yellow);
+            font-family: monospace;
+            text-transform: uppercase;
+        }
+
+        .preview-box {
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 10px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .previews-holder {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+        }
+
+        .preview-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            font-size: 11px;
+            color: var(--text-dim);
+        }
+
+        .preview-item canvas {
+            background: #000000;
+            border: 1px solid #444b6e;
+            image-rendering: pixelated;
+        }
+
+        .code-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .code-container {
+            flex: 1;
+            position: relative;
+            background: #0d1117;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #asmOutput {
+            flex: 1;
+            width: 100%;
+            background: transparent;
+            color: #79c0ff;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.42;
+            padding: 12px;
+            border: none;
+            outline: none;
+            resize: none;
+            white-space: pre;
+            tab-size: 4;
+        }
+
+        .status-bar {
+            background: #0d1117;
+            border-top: 1px solid var(--border-color);
+            padding: 4px 12px;
+            font-size: 11px;
+            color: var(--text-dim);
+            display: flex;
+            justify-content: space-between;
+            font-family: monospace;
+        }
+
+        .copied-toast {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: #238636;
+            color: #ffffff;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+        .copied-toast.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo-area">
+            <span class="c64-badge">C64U</span>
+            <h1>C64 Retro Sprite Studio</h1>
+            <span class="hardware-target">MOS 6510 / VIC-II Graphics Generator</span>
+        </div>
+        <div>
+            <span id="posIndicator" style="font-family: monospace; font-size: 12px; color: var(--c64-ltblue);">X: 00 | Y: 00</span>
+        </div>
+    </header>
+
+    <div class="main-workspace">
+        <!-- ================= Left Hand Side: Canvas & Tools ================= -->
+        <div class="lhs-panel">
+            <div class="toolbar">
+                <!-- Undo & Redo -->
+                <div class="tool-group">
+                    <button id="btnUndo" onclick="undo()" title="Undo (Ctrl+Z)" disabled>↩️ Undo</button>
+                    <button id="btnRedo" onclick="redo()" title="Redo (Ctrl+Y)" disabled>↪️ Redo</button>
+                </div>
+
+                <!-- Drawing Tools -->
+                <div class="tool-group">
+                    <button id="toolPen" class="active" onclick="setTool('pen')">✏️ Pen</button>
+                    <button id="toolEraser" onclick="setTool('eraser')">🧹 Erase</button>
+                    <button id="toolFill" onclick="setTool('fill')">🪣 Fill</button>
+                </div>
+
+                <!-- Shift & Flip Operations -->
+                <div class="tool-group">
+                    <button onclick="shiftSprite(0, -1)" title="Shift Up">⬆️</button>
+                    <button onclick="shiftSprite(0, 1)" title="Shift Down">⬇️</button>
+                    <button onclick="shiftSprite(-1, 0)" title="Shift Left">⬅️</button>
+                    <button onclick="shiftSprite(1, 0)" title="Shift Right">➡️</button>
+                    <button onclick="flipHorizontal()" title="Flip Horizontal">🪞 Flip H</button>
+                    <button onclick="flipVertical()" title="Flip Vertical">🔃 Flip V</button>
+                </div>
+
+                <div class="tool-group">
+                    <button onclick="invertSprite()">🔄 Invert</button>
+                    <button onclick="clearSprite()">🗑️ Clear</button>
+                </div>
+
+                <!-- Architecture Modes -->
+                <div class="tool-group">
+                    <button id="btnModeSingle" onclick="setMode('single')" title="Standard 24x21 Single-Pixel Hires Mode">🎯 Single Sprite (Hires 24×21)</button>
+                    <button id="btnModeMulti" class="active" onclick="setMode('multicolor')" title="4-Color 12x21 Double-Wide Multicolor Mode">🎨 Multicolor (4-Color 12×21)</button>
+                </div>
+
+                <!-- Commodore (C=) Logo Preset -->
+                <div class="tool-group">
+                    <button class="btn-special" onclick="loadCommodoreLogoPreset()" title="Load Commodore (C=) Logo Preset">🔴 C= Logo</button>
+                </div>
+            </div>
+
+            <div class="canvas-container">
+                <canvas id="spriteCanvas" width="384" height="336"></canvas>
+            </div>
+
+            <div class="palette-section">
+                <!-- Color Slots in this Sprite Boundary -->
+                <div class="slot-bar" id="slotBar">
+                    <span class="slot-title">Active Brush:</span>
+                    
+                    <button id="slotBtn0" class="slot-btn" onclick="selectSlot(0)">
+                        <div class="slot-left-area">
+                            <div id="slotColorPreview0" class="slot-swatch-preview"></div>
+                            <span>%00: Transparent ($D021)</span>
+                        </div>
+                    </button>
+
+                    <button id="slotBtn1" class="slot-btn" onclick="selectSlot(1)">
+                        <div class="slot-left-area">
+                            <div id="slotColorPreview1" class="slot-swatch-preview"></div>
+                            <span>%01: Extra Color 1 ($D025)</span>
+                        </div>
+                    </button>
+
+                    <button id="slotBtn2" class="slot-btn active" onclick="selectSlot(2)">
+                        <div class="slot-left-area">
+                            <div id="slotColorPreview2" class="slot-swatch-preview"></div>
+                            <span id="slotLabel2">%10: Sprite Color ($D027)</span>
+                        </div>
+                    </button>
+
+                    <button id="slotBtn3" class="slot-btn" onclick="selectSlot(3)">
+                        <div class="slot-left-area">
+                            <div id="slotColorPreview3" class="slot-swatch-preview"></div>
+                            <span>%11: Extra Color 2 ($D026)</span>
+                        </div>
+                    </button>
+                </div>
+
+                <div class="palette-header">
+                    <span>Commodore 64 16-Color Palette (Click to select paint brush)</span>
+                    <span id="activeColorLabel">Active: Sprite Color ($D027)</span>
+                </div>
+                <div class="swatch-grid" id="swatchGrid"></div>
+            </div>
+        </div>
+
+        <!-- ================= Right Hand Side: Code & Preview ================= -->
+        <div class="rhs-panel">
+            <div class="rhs-header">
+                <h2>6502 KickAssembler Output</h2>
+                <div class="code-actions">
+                    <button class="btn-accent" onclick="copyAsm()">📋 Copy ASM</button>
+                    <button onclick="downloadAsm()">💾 Save .asm</button>
+                    <button onclick="downloadBin()">💾 Save .bin</button>
+                </div>
+            </div>
+
+            <div class="preview-box">
+                <div class="previews-holder">
+                    <div class="preview-item">
+                        <canvas id="preview1x" width="24" height="21"></canvas>
+                        <span>1x Scale</span>
+                    </div>
+                    <div class="preview-item">
+                        <canvas id="preview2x" width="48" height="42"></canvas>
+                        <span>2x Scale</span>
+                    </div>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 4px; align-items: flex-end;">
+                    <div style="display: flex; align-items: center; gap: 6px; font-size: 12px;">
+                        <label for="spriteLabel">Label:</label>
+                        <input type="text" id="spriteLabel" value="sprite_c64_logo" oninput="updateAsm()" style="background:#0d1117; color:#fff; border:1px solid #3b4261; padding:3px 6px; border-radius:3px; font-family:monospace; width:140px;">
+                    </div>
+                    <div id="byteSummaryLabel" style="font-size: 11px; color: var(--text-dim); font-family: monospace;">
+                        64 Bytes ($0040) | 4 Simultaneous Colors
+                    </div>
+                </div>
+            </div>
+
+            <div class="code-container">
+                <textarea id="asmOutput" readonly spellcheck="false"></textarea>
+                <div id="toast" class="copied-toast">✓ KickAssembler Code Copied!</div>
+            </div>
+
+            <div class="status-bar">
+                <span id="statusMode">Mode: VIC-II MULTICOLOR (12×21 Double-Pixels, 4 Colors)</span>
+                <span id="statusSync">$D025 / $D026 / $D027 Colors Synchronized</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const C64_COLORS = [
+            { id: 0, name: "Black", hex: "#000000" },
+            { id: 1, name: "White", hex: "#ffffff" },
+            { id: 2, name: "Red", hex: "#880000" },
+            { id: 3, name: "Cyan", hex: "#aaffee" },
+            { id: 4, name: "Purple", hex: "#cc44cc" },
+            { id: 5, name: "Green", hex: "#00cc55" },
+            { id: 6, name: "Blue", hex: "#0000aa" },
+            { id: 7, name: "Yellow", hex: "#eeee77" },
+            { id: 8, name: "Orange", hex: "#dd8855" },
+            { id: 9, name: "Brown", hex: "#664400" },
+            { id: 10, name: "Light Red", hex: "#ff7777" },
+            { id: 11, name: "Dark Grey", hex: "#333333" },
+            { id: 12, name: "Grey", hex: "#777777" },
+            { id: 13, name: "Light Green", hex: "#aaff66" },
+            { id: 14, name: "Light Blue", hex: "#0088ff" },
+            { id: 15, name: "Light Grey", hex: "#bbbbbb" }
+        ];
+
+        const WIDTH = 24;
+        const HEIGHT = 21;
+        const CELL_SIZE = 16; // 384x336 canvas
+
+        // 4 VIC-II Color Slots (Defaulting to authentic Commodore Logo colors):
+        // Slot 0 (%00): Background ($D021) -> Black ($00)
+        // Slot 1 (%01): Extra Color 1 ($D025) -> Red ($02)
+        // Slot 2 (%10): Main Sprite Color ($D027) -> Light Grey ($0F = 15)
+        // Slot 3 (%11): Extra Color 2 ($D026) -> Blue ($06 = 6)
+        let colorSlots = [0, 2, 15, 6];
+        let activeSlot = 2; // Default to Slot 2 (Light Grey Sprite Color)
+
+        // Grid stores 0..3:
+        // In Single mode: 0=transparent, 1=sprite color (individual 1x1 pixels)
+        // In Multicolor mode: 0=transparent, 1=MC1, 2=Sprite, 3=MC2 (2x1 double-pixels)
+        let grid = Array.from({ length: HEIGHT }, () => Array(WIDTH).fill(0));
+        let activeTool = 'pen';
+        let currentMode = 'multicolor'; // 'single' or 'multicolor'
+        let isMouseDown = false;
+        let hoverPos = null;
+
+        // Undo & Redo History Stacks
+        const undoStack = [];
+        const redoStack = [];
+        const MAX_UNDO = 50;
+
+        const canvas = document.getElementById('spriteCanvas');
+        const ctx = canvas.getContext('2d');
+        const prev1x = document.getElementById('preview1x').getContext('2d');
+        const prev2x = document.getElementById('preview2x').getContext('2d');
+        const asmOutput = document.getElementById('asmOutput');
+        const posIndicator = document.getElementById('posIndicator');
+        const activeColorLabel = document.getElementById('activeColorLabel');
+        const statusMode = document.getElementById('statusMode');
+        const statusSync = document.getElementById('statusSync');
+        const byteSummaryLabel = document.getElementById('byteSummaryLabel');
+
+        function pushState() {
+            const gridCopy = grid.map(row => [...row]);
+            undoStack.push({
+                grid: gridCopy,
+                colorSlots: [...colorSlots],
+                currentMode,
+                activeSlot,
+                label: document.getElementById('spriteLabel').value
+            });
+            if (undoStack.length > MAX_UNDO) {
+                undoStack.shift();
+            }
+            redoStack.length = 0; // Clear redo on new action
+            updateUndoRedoButtons();
+        }
+
+        function undo() {
+            if (undoStack.length === 0) return;
+            const currentGridCopy = grid.map(row => [...row]);
+            redoStack.push({
+                grid: currentGridCopy,
+                colorSlots: [...colorSlots],
+                currentMode,
+                activeSlot,
+                label: document.getElementById('spriteLabel').value
+            });
+
+            const prev = undoStack.pop();
+            grid = prev.grid.map(row => [...row]);
+            colorSlots = [...prev.colorSlots];
+            currentMode = prev.currentMode;
+            activeSlot = prev.activeSlot;
+            if (prev.label) document.getElementById('spriteLabel').value = prev.label;
+
+            updateModeUI();
+            updateSlotPreviews();
+            render();
+            updateAsm();
+            updateUndoRedoButtons();
+        }
+
+        function redo() {
+            if (redoStack.length === 0) return;
+            const currentGridCopy = grid.map(row => [...row]);
+            undoStack.push({
+                grid: currentGridCopy,
+                colorSlots: [...colorSlots],
+                currentMode,
+                activeSlot,
+                label: document.getElementById('spriteLabel').value
+            });
+
+            const next = redoStack.pop();
+            grid = next.grid.map(row => [...row]);
+            colorSlots = [...next.colorSlots];
+            currentMode = next.currentMode;
+            activeSlot = next.activeSlot;
+            if (next.label) document.getElementById('spriteLabel').value = next.label;
+
+            updateModeUI();
+            updateSlotPreviews();
+            render();
+            updateAsm();
+            updateUndoRedoButtons();
+        }
+
+        function updateUndoRedoButtons() {
+            const btnUndo = document.getElementById('btnUndo');
+            const btnRedo = document.getElementById('btnRedo');
+            if (btnUndo) btnUndo.disabled = (undoStack.length === 0);
+            if (btnRedo) btnRedo.disabled = (redoStack.length === 0);
+        }
+
+        // Global Keyboard Shortcut Listener for Undo (Ctrl+Z) & Redo (Ctrl+Y / Ctrl+Shift+Z)
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key.toLowerCase() === 'z') {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        redo();
+                    } else {
+                        undo();
+                    }
+                } else if (e.key.toLowerCase() === 'y') {
+                    e.preventDefault();
+                    redo();
+                }
+            }
+        });
+
+        // Initialize 16-Color Swatch Grid
+        const swatchContainer = document.getElementById('swatchGrid');
+        C64_COLORS.forEach(c => {
+            const div = document.createElement('div');
+            div.className = 'swatch';
+            div.style.backgroundColor = c.hex;
+            div.title = `${c.name} ($${c.id.toString(16).toUpperCase()})`;
+            div.onclick = () => onPaletteSwatchClick(c.id);
+            div.id = `swatch-${c.id}`;
+            swatchContainer.appendChild(div);
+        });
+
+        function updateSlotPreviews() {
+            for (let i = 0; i < 4; i++) {
+                const preview = document.getElementById(`slotColorPreview${i}`);
+                if (preview) {
+                    preview.style.backgroundColor = C64_COLORS[colorSlots[i]].hex;
+                }
+                const btn = document.getElementById(`slotBtn${i}`);
+                if (btn) {
+                    btn.classList.toggle('active', i === activeSlot);
+                }
+            }
+
+            // Highlight matching palette swatch for current brush
+            C64_COLORS.forEach(c => {
+                const el = document.getElementById(`swatch-${c.id}`);
+                if (el) {
+                    const isSelected = (c.id === colorSlots[activeSlot]);
+                    el.classList.toggle('selected', isSelected);
+                }
+            });
+
+            if (currentMode === 'single') {
+                const c = C64_COLORS[colorSlots[2]];
+                activeColorLabel.textContent = `Active Brush: ${activeSlot === 0 ? 'Transparent / Eraser' : `Sprite Color: ${c.name} ($${c.id.toString(16).padStart(2, '0').toUpperCase()})`}`;
+            } else {
+                const slotDescriptions = [
+                    "%00: Transparent ($D021)",
+                    "%01: Extra Color 1 ($D025)",
+                    "%10: Sprite Color ($D027)",
+                    "%11: Extra Color 2 ($D026)"
+                ];
+                const activeColor = C64_COLORS[colorSlots[activeSlot]];
+                activeColorLabel.textContent = `Active Brush: ${slotDescriptions[activeSlot]} ➜ ${activeColor.name} ($${activeColor.id.toString(16).padStart(2, '0').toUpperCase()})`;
+            }
+        }
+
+        // Clicking a slot button selects it for painting (NEVER modifies existing pixels)
+        function selectSlot(slotIdx) {
+            activeSlot = slotIdx;
+            updateSlotPreviews();
+        }
+
+        // Clicking a swatch from the 16-color palette
+        function onPaletteSwatchClick(colorId) {
+            if (currentMode === 'single') {
+                pushState();
+                colorSlots[2] = colorId;
+                activeSlot = 2;
+                updateSlotPreviews();
+                render();
+                updateAsm();
+                return;
+            }
+
+            // In Multicolor mode:
+            // 1. Is this color ALREADY one of the active slots?
+            // If so, switch active brush to that slot WITHOUT changing any drawn colors!
+            const existingSlot = colorSlots.indexOf(colorId);
+            if (existingSlot !== -1) {
+                selectSlot(existingSlot);
+                return;
+            }
+
+            // 2. It's a new color not yet in any slot:
+            // Assign it to the currently active slot (or Slot 2 if Background was active)
+            pushState();
+            const targetSlot = (activeSlot === 0) ? 2 : activeSlot;
+            colorSlots[targetSlot] = colorId;
+            activeSlot = targetSlot;
+            updateSlotPreviews();
+            render();
+            updateAsm();
+        }
+
+        function setTool(tool) {
+            activeTool = tool;
+            ['toolPen', 'toolEraser', 'toolFill'].forEach(id => {
+                document.getElementById(id).classList.remove('active');
+            });
+            if (tool === 'pen') document.getElementById('toolPen').classList.add('active');
+            if (tool === 'eraser') document.getElementById('toolEraser').classList.add('active');
+            if (tool === 'fill') document.getElementById('toolFill').classList.add('active');
+        }
+
+        function updateModeUI() {
+            const isSingle = (currentMode === 'single');
+            document.getElementById('btnModeSingle').classList.toggle('active', isSingle);
+            document.getElementById('btnModeMulti').classList.toggle('active', !isSingle);
+
+            document.getElementById('slotBtn1').style.display = isSingle ? 'none' : 'flex';
+            document.getElementById('slotBtn3').style.display = isSingle ? 'none' : 'flex';
+            document.getElementById('slotLabel2').textContent = isSingle ? '%1: Sprite Color ($D027)' : '%10: Sprite Color ($D027)';
+
+            if (isSingle) {
+                statusMode.textContent = 'Mode: VIC-II SINGLE SPRITE (24×21 Single Pixels)';
+                statusSync.textContent = 'VIC-II $D027 Color Synchronized';
+                byteSummaryLabel.textContent = '64 Bytes ($0040) | Single Sprite (Hires)';
+            } else {
+                statusMode.textContent = 'Mode: VIC-II MULTICOLOR (12×21 Double-Pixels, 4 Colors)';
+                statusSync.textContent = '$D025 / $D026 / $D027 Colors Synchronized';
+                byteSummaryLabel.textContent = '64 Bytes ($0040) | 4 Simultaneous Colors';
+            }
+        }
+
+        function setMode(mode) {
+            if (mode === currentMode) return;
+            pushState();
+            currentMode = mode;
+            const isSingle = (mode === 'single');
+
+            if (isSingle) {
+                if (activeSlot !== 0) activeSlot = 2;
+                // Normalize grid values: convert multicolor 2 and 3 into 1 so single-pixel mode has no lingering pair artifacts
+                for (let y = 0; y < HEIGHT; y++) {
+                    for (let x = 0; x < WIDTH; x++) {
+                        if (grid[y][x] > 0) grid[y][x] = 1;
+                    }
+                }
+            }
+            updateModeUI();
+            updateSlotPreviews();
+            render();
+            updateAsm();
+        }
+
+        function getGridPos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            const x = Math.floor(((evt.clientX - rect.left) * scaleX) / CELL_SIZE);
+            const y = Math.floor(((evt.clientY - rect.top) * scaleY) / CELL_SIZE);
+            return {
+                x: Math.max(0, Math.min(WIDTH - 1, x)),
+                y: Math.max(0, Math.min(HEIGHT - 1, y))
+            };
+        }
+
+        function applyTool(x, y) {
+            if (currentMode === 'single') {
+                // Single Sprite (Hires) Mode: Strictly 1x1 single pixel editing!
+                // NEVER affects adjacent pixels!
+                const val = (activeTool === 'eraser' || activeSlot === 0) ? 0 : 1;
+
+                if (activeTool === 'pen' || activeTool === 'eraser') {
+                    grid[y][x] = val;
+                } else if (activeTool === 'fill') {
+                    floodFillSingle(x, y, val);
+                }
+            } else {
+                // Multicolor Mode: 12x21 double-wide blocks
+                const val = (activeTool === 'eraser') ? 0 : activeSlot;
+                const evenX = Math.floor(x / 2) * 2;
+
+                if (activeTool === 'pen' || activeTool === 'eraser') {
+                    grid[y][evenX] = val;
+                    grid[y][evenX + 1] = val;
+                } else if (activeTool === 'fill') {
+                    floodFillMulticolor(x, y, val);
+                }
+            }
+            render();
+            updateAsm();
+        }
+
+        // Single-Pixel Flood Fill (1-pixel steps, strictly 1x1 boundaries)
+        function floodFillSingle(startX, startY, fillVal) {
+            const targetVal = grid[startY][startX];
+            if (targetVal === fillVal) return;
+
+            const queue = [[startX, startY]];
+            const visited = new Set();
+
+            while (queue.length > 0) {
+                const [cx, cy] = queue.pop();
+                const key = `${cx},${cy}`;
+                if (visited.has(key)) continue;
+                if (cx < 0 || cx >= WIDTH || cy < 0 || cy >= HEIGHT) continue;
+                if (grid[cy][cx] !== targetVal) continue;
+
+                visited.add(key);
+                grid[cy][cx] = fillVal;
+
+                queue.push([cx - 1, cy]);
+                queue.push([cx + 1, cy]);
+                queue.push([cx, cy - 1]);
+                queue.push([cx, cy + 1]);
+            }
+        }
+
+        // Multicolor Flood Fill (2-pixel wide blocks)
+        function floodFillMulticolor(startX, startY, fillVal) {
+            const startBlock = Math.floor(startX / 2) * 2;
+            const targetVal = grid[startY][startBlock];
+            if (targetVal === fillVal) return;
+
+            const queue = [[startBlock, startY]];
+            const visited = new Set();
+
+            while (queue.length > 0) {
+                const [cx, cy] = queue.pop();
+                const key = `${cx},${cy}`;
+                if (visited.has(key)) continue;
+                if (cx < 0 || cx >= WIDTH || cy < 0 || cy >= HEIGHT) continue;
+                if (grid[cy][cx] !== targetVal) continue;
+
+                visited.add(key);
+                grid[cy][cx] = fillVal;
+                grid[cy][cx + 1] = fillVal;
+
+                queue.push([cx - 2, cy]);
+                queue.push([cx + 2, cy]);
+                queue.push([cx, cy - 1]);
+                queue.push([cx, cy + 1]);
+            }
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            pushState(); // Save state before starting stroke
+            isMouseDown = true;
+            const { x, y } = getGridPos(e);
+            applyTool(x, y);
+        });
+
+        window.addEventListener('mouseup', () => {
+            isMouseDown = false;
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const { x, y } = getGridPos(e);
+            hoverPos = { x, y };
+            if (currentMode === 'single') {
+                posIndicator.textContent = `Pixel X: ${String(x).padStart(2, '0')} | Y: ${String(y).padStart(2, '0')}`;
+            } else {
+                const blockX = Math.floor(x / 2);
+                posIndicator.textContent = `Block X: ${String(blockX).padStart(2, '0')} (Px ${String(x).padStart(2, '0')}) | Y: ${String(y).padStart(2, '0')}`;
+            }
+
+            if (isMouseDown && activeTool !== 'fill') {
+                applyTool(x, y);
+            } else {
+                render();
+            }
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            hoverPos = null;
+            render();
+        });
+
+        function clearSprite() {
+            pushState();
+            grid = Array.from({ length: HEIGHT }, () => Array(WIDTH).fill(0));
+            render();
+            updateAsm();
+        }
+
+        function invertSprite() {
+            pushState();
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < WIDTH; x++) {
+                    if (currentMode === 'single') {
+                        grid[y][x] = grid[y][x] ? 0 : 1;
+                    } else {
+                        const invVal = activeSlot === 0 ? 2 : activeSlot;
+                        grid[y][x] = (grid[y][x] === 0) ? invVal : 0;
+                    }
+                }
+            }
+            render();
+            updateAsm();
+        }
+
+        function shiftSprite(dx, dy) {
+            pushState();
+            const newGrid = Array.from({ length: HEIGHT }, () => Array(WIDTH).fill(0));
+            if (currentMode === 'multicolor') dx *= 2;
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < WIDTH; x++) {
+                    const nx = x + dx;
+                    const ny = y + dy;
+                    if (nx >= 0 && nx < WIDTH && ny >= 0 && ny < HEIGHT) {
+                        newGrid[ny][nx] = grid[y][x];
+                    }
+                }
+            }
+            grid = newGrid;
+            render();
+            updateAsm();
+        }
+
+        function flipHorizontal() {
+            pushState();
+            for (let y = 0; y < HEIGHT; y++) {
+                if (currentMode === 'multicolor') {
+                    const pairs = [];
+                    for (let x = 0; x < 12; x++) pairs.push(grid[y][x * 2]);
+                    pairs.reverse();
+                    for (let x = 0; x < 12; x++) {
+                        grid[y][x * 2] = pairs[x];
+                        grid[y][x * 2 + 1] = pairs[x];
+                    }
+                } else {
+                    grid[y].reverse();
+                }
+            }
+            render();
+            updateAsm();
+        }
+
+        function flipVertical() {
+            pushState();
+            grid.reverse();
+            render();
+            updateAsm();
+        }
+
+        function getColorHexForValue(val) {
+            if (val === 0) return '#05070c'; // Background preview
+            if (currentMode === 'single') {
+                return C64_COLORS[colorSlots[2]].hex;
+            }
+            return C64_COLORS[colorSlots[val]].hex;
+        }
+
+        function render() {
+            ctx.fillStyle = '#0a0d14';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Pixels
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < WIDTH; x++) {
+                    const v = grid[y][x];
+                    if (v > 0) {
+                        ctx.fillStyle = getColorHexForValue(v);
+                        ctx.fillRect(x * CELL_SIZE, y * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+                    }
+                }
+            }
+
+            // Draw Grid Lines
+            if (currentMode === 'single') {
+                // 24 individual single-pixel columns
+                ctx.lineWidth = 0.8;
+                for (let x = 0; x <= WIDTH; x++) {
+                    ctx.strokeStyle = '#22283e';
+                    ctx.beginPath();
+                    ctx.moveTo(x * CELL_SIZE, 0);
+                    ctx.lineTo(x * CELL_SIZE, HEIGHT * CELL_SIZE);
+                    ctx.stroke();
+                }
+            } else {
+                // 12 double-wide columns in Multicolor mode
+                for (let x = 0; x <= WIDTH; x += 2) {
+                    ctx.strokeStyle = '#384268';
+                    ctx.lineWidth = 1.4;
+                    ctx.beginPath();
+                    ctx.moveTo(x * CELL_SIZE, 0);
+                    ctx.lineTo(x * CELL_SIZE, HEIGHT * CELL_SIZE);
+                    ctx.stroke();
+                }
+                // Subtle mid-line inside double-pixel
+                ctx.strokeStyle = '#181e30';
+                ctx.lineWidth = 0.5;
+                for (let x = 1; x < WIDTH; x += 2) {
+                    ctx.beginPath();
+                    ctx.moveTo(x * CELL_SIZE, 0);
+                    ctx.lineTo(x * CELL_SIZE, HEIGHT * CELL_SIZE);
+                    ctx.stroke();
+                }
+            }
+
+            // Horizontal Grid Lines
+            ctx.strokeStyle = '#1e2438';
+            ctx.lineWidth = 0.8;
+            for (let y = 0; y <= HEIGHT; y++) {
+                ctx.beginPath();
+                ctx.moveTo(0, y * CELL_SIZE);
+                ctx.lineTo(WIDTH * CELL_SIZE, y * CELL_SIZE);
+                ctx.stroke();
+            }
+
+            // Draw Hover Cursor Highlight
+            if (hoverPos) {
+                ctx.strokeStyle = '#00f0ff';
+                ctx.lineWidth = 2;
+                if (currentMode === 'single') {
+                    // 1x1 Single pixel highlight
+                    ctx.strokeRect(hoverPos.x * CELL_SIZE + 1, hoverPos.y * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2);
+                } else {
+                    // 2x1 Double-wide block highlight
+                    const evenX = Math.floor(hoverPos.x / 2) * 2;
+                    ctx.strokeRect(evenX * CELL_SIZE + 1, hoverPos.y * CELL_SIZE + 1, CELL_SIZE * 2 - 2, CELL_SIZE - 2);
+                }
+            }
+
+            // Draw Previews
+            renderPreviews();
+        }
+
+        function renderPreviews() {
+            [prev1x, prev2x].forEach(p => {
+                p.fillStyle = '#000000';
+                p.fillRect(0, 0, p.canvas.width, p.canvas.height);
+            });
+
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < WIDTH; x++) {
+                    const v = grid[y][x];
+                    if (v > 0) {
+                        const hex = getColorHexForValue(v);
+                        prev1x.fillStyle = hex;
+                        prev1x.fillRect(x, y, 1, 1);
+
+                        prev2x.fillStyle = hex;
+                        prev2x.fillRect(x * 2, y * 2, 2, 2);
+                    }
+                }
+            }
+        }
+
+        function updateAsm() {
+            const label = document.getElementById('spriteLabel').value.trim() || 'sprite_c64_logo';
+            const rawBytes = [];
+
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let b = 0; b < 3; b++) {
+                    let byteVal = 0;
+                    if (currentMode === 'multicolor') {
+                        for (let p = 0; p < 4; p++) {
+                            const x = b * 8 + p * 2;
+                            const v = grid[y][x] & 0x03;
+                            byteVal |= (v << ((3 - p) * 2));
+                        }
+                    } else {
+                        for (let bit = 0; bit < 8; bit++) {
+                            const x = b * 8 + bit;
+                            if (grid[y][x]) byteVal |= (1 << (7 - bit));
+                        }
+                    }
+                    rawBytes.push(byteVal);
+                }
+            }
+            rawBytes.push(0); // 64th byte padding
+
+            const cMain = C64_COLORS[colorSlots[2]];
+            const cMC1 = C64_COLORS[colorSlots[1]];
+            const cMC2 = C64_COLORS[colorSlots[3]];
+
+            const lines = [
+                `// ====================================================================`,
+                `// Commodore 64 Sprite: ${label}`,
+                `// Mode: ${currentMode === 'single' ? 'HIGH-RESOLUTION (1-bit)' : 'MULTICOLOR (2-bit / 4 Colors)'} | 24x21 | 64 Bytes`,
+            ];
+
+            if (currentMode === 'single') {
+                lines.push(`// Sprite Color: $${cMain.id.toString(16).padStart(2, '0').toUpperCase()} (${cMain.name})`);
+            } else {
+                lines.push(`// Color Setup within this Sprite Boundary:`);
+                lines.push(`//   %00 = Transparent / Screen BG ($D021)`);
+                lines.push(`//   %01 = Extra Color 1 ($D025): $${cMC1.id.toString(16).padStart(2, '0').toUpperCase()} (${cMC1.name})`);
+                lines.push(`//   %10 = Individual Color ($D027): $${cMain.id.toString(16).padStart(2, '0').toUpperCase()} (${cMain.name})`);
+                lines.push(`//   %11 = Extra Color 2 ($D026): $${cMC2.id.toString(16).padStart(2, '0').toUpperCase()} (${cMC2.name})`);
+            }
+            lines.push(`// ====================================================================`);
+            lines.push(``);
+            lines.push(`// VIC-II Hardware Color Initialization Routine:`);
+            lines.push(`setup_${label}_colors:`);
+            lines.push(`    lda #${cMain.id} : sta $d027 // Sprite 0 Individual Color: ${cMain.name}`);
+
+            if (currentMode === 'multicolor') {
+                lines.push(`    lda #${cMC1.id} : sta $d025 // Sprite Extra Color 1: ${cMC1.name}`);
+                lines.push(`    lda #${cMC2.id} : sta $d026 // Sprite Extra Color 2: ${cMC2.name}`);
+                lines.push(`    lda $d01c : ora #%00000001 : sta $d01c // Enable Multicolor for Sprite 0`);
+            } else {
+                lines.push(`    lda $d01c : and #%11111110 : sta $d01c // High-Resolution Mode`);
+            }
+            lines.push(`    rts`);
+            lines.push(``);
+            lines.push(`.align $40 // Sprites must align to 64-byte boundaries`);
+            lines.push(`${label}:`);
+
+            for (let y = 0; y < HEIGHT; y++) {
+                const b0 = rawBytes[y * 3 + 0].toString(2).padStart(8, '0');
+                const b1 = rawBytes[y * 3 + 1].toString(2).padStart(8, '0');
+                const b2 = rawBytes[y * 3 + 2].toString(2).padStart(8, '0');
+                const rowComment = ` // Row ${String(y).padStart(2, ' ')}`;
+                lines.push(`    .byte %${b0}, %${b1}, %${b2}${rowComment}`);
+            }
+            lines.push(`    .byte $00 // Byte 64: Padding`);
+
+            asmOutput.value = lines.join('\n');
+        }
+
+        function copyAsm() {
+            navigator.clipboard.writeText(asmOutput.value).then(() => {
+                const toast = document.getElementById('toast');
+                toast.classList.add('show');
+                setTimeout(() => toast.classList.remove('show'), 1500);
+            });
+        }
+
+        function downloadAsm() {
+            const label = document.getElementById('spriteLabel').value.trim() || 'sprite_c64_logo';
+            const blob = new Blob([asmOutput.value], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${label}.asm`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function downloadBin() {
+            const label = document.getElementById('spriteLabel').value.trim() || 'sprite_c64_logo';
+            const rawBytes = new Uint8Array(64);
+            let idx = 0;
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let b = 0; b < 3; b++) {
+                    let byteVal = 0;
+                    if (currentMode === 'multicolor') {
+                        for (let p = 0; p < 4; p++) {
+                            const x = b * 8 + p * 2;
+                            const v = grid[y][x] & 0x03;
+                            byteVal |= (v << ((3 - p) * 2));
+                        }
+                    } else {
+                        for (let bit = 0; bit < 8; bit++) {
+                            const x = b * 8 + bit;
+                            if (grid[y][x]) byteVal |= (1 << (7 - bit));
+                        }
+                    }
+                    rawBytes[idx++] = byteVal;
+                }
+            }
+            rawBytes[63] = 0;
+
+            const blob = new Blob([rawBytes], { type: 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${label}.bin`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Commodore (C=) Logo Preset (Exact Authentic Multi-Color Design)
+        function loadCommodoreLogoPreset() {
+            pushState();
+            currentMode = 'multicolor';
+            // BG=Black ($00), MC1=Red ($02), Sprite=Light Grey ($0F=15), MC2=Blue ($06=6)
+            colorSlots = [0, 2, 15, 6];
+            activeSlot = 2; // Sprite Color (Light Grey)
+            document.getElementById('spriteLabel').value = 'sprite_c64_logo';
+
+            const mcRows = [
+                "000222220000",
+                "022233332220",
+                "223333333320",
+                "233333333320",
+                "233322223320",
+                "233220002222",
+                "233200023332",
+                "233200023322",
+                "233200023220",
+                "233200002200",
+                "233200021220",
+                "233200021122",
+                "233200021112",
+                "233200002222",
+                "233220023320",
+                "233322223320",
+                "233333333320",
+                "223333332220",
+                "022233332000",
+                "000022222000",
+                "000000000000",
+            ];
+
+            for (let y = 0; y < HEIGHT; y++) {
+                for (let x = 0; x < 12; x++) {
+                    const v = parseInt(mcRows[y][x]);
+                    grid[y][x * 2] = v;
+                    grid[y][x * 2 + 1] = v;
+                }
+            }
+            updateModeUI();
+            updateSlotPreviews();
+            render();
+            updateAsm();
+        }
+
+        // Initialize Commodore (C=) Logo as the primary default design on page load
+        loadCommodoreLogoPreset();
+        undoStack.length = 0; // Clear initial preset load from undo history
+        updateUndoRedoButtons();
+    </script>
+</body>
+</html>

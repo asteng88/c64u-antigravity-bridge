@@ -26,7 +26,17 @@ class CompilationResult:
     stdout: str
     stderr: str
     symbol_file: Optional[Path] = None
+    output_tap: Optional[Path] = None
     error_message: Optional[str] = None
+
+    def to_tap(self, tap_path: Optional[Union[str, Path]] = None, tape_name: Optional[str] = None) -> Optional[Path]:
+        """Convert the compiled PRG binary to a standard .tap cassette tape image."""
+        if not self.success or not self.output_prg or not self.output_prg.exists():
+            return None
+        from .tap import save_prg_to_tap
+        tap = save_prg_to_tap(self.output_prg, tap_path=tap_path, tape_name=tape_name)
+        self.output_tap = tap
+        return tap
 
 
 class CrossCompiler:
@@ -181,3 +191,19 @@ class CrossCompiler:
                 stderr=str(e),
                 error_message=f"CC65 execution error: {e}",
             )
+
+    def compile_to_tap(
+        self,
+        source_path: Union[Path, str],
+        output_tap: Optional[Union[Path, str]] = None,
+        tape_name: Optional[str] = None,
+        assembler: str = "auto",
+        extra_flags: Optional[List[str]] = None,
+    ) -> CompilationResult:
+        """
+        Compile source file to PRG and automatically export to a Commodore 64 .tap cassette image.
+        """
+        res = self.compile(source_path=source_path, assembler=assembler, extra_flags=extra_flags)
+        if res.success and res.output_prg:
+            res.to_tap(tap_path=output_tap, tape_name=tape_name)
+        return res

@@ -63,6 +63,16 @@ def main():
     type_parser = subparsers.add_parser("type", help="Inject keystrokes into C64 keyboard buffer")
     type_parser.add_argument("text", help="Text to type into the C64")
 
+    # Command: tap (export to .tap cassette image)
+    tap_parser = subparsers.add_parser("tap", help="Export .prg or compile .asm to .tap cassette tape image")
+    tap_parser.add_argument("file", help="Path to .prg, .asm, or .py file")
+    tap_parser.add_argument("-o", "--output", help="Optional path to output .tap file")
+    tap_parser.add_argument("--name", help="Optional 16-character tape label (defaults to filename)")
+    tap_parser.add_argument("--assembler", choices=["auto", "kickass", "acme", "cc65"], default="auto")
+
+    # Command: sprite (launch Sprite Studio)
+    subparsers.add_parser("sprite", help="Launch interactive C64 Retro Sprite Studio in web browser")
+
     # Command: status
     subparsers.add_parser("status", help="Get C64U connection and device status")
 
@@ -75,9 +85,48 @@ def main():
         run_stdio_server()
         return
 
+    if args.command == "sprite":
+        import webbrowser
+        html_path = Path(__file__).parent / "web" / "sprite_studio.html"
+        webbrowser.open(html_path.resolve().as_uri())
+        print(f"Opening C64 Retro Sprite Studio in browser: {html_path.resolve()}")
+        return
+
     if args.command == "tui":
         from .tui import main as run_tui
         run_tui()
+        return
+
+    if args.command == "tap":
+        from .tap import save_prg_to_tap, asm_to_tap
+        file_path = Path(args.file)
+        if not file_path.exists():
+            print(f"Error: File not found: {file_path}", file=sys.stderr)
+            sys.exit(1)
+        ext = file_path.suffix.lower()
+        if ext == ".prg":
+            out = save_prg_to_tap(file_path, tap_path=args.output, tape_name=args.name)
+            print(f"Exported TAP image: {out} ({out.stat().st_size} bytes)")
+        elif ext in [".asm", ".s"]:
+            out = asm_to_tap(file_path, tap_path=args.output, tape_name=args.name, assembler=args.assembler)
+            print(f"Compiled and exported TAP image: {out} ({out.stat().st_size} bytes)")
+        elif ext == ".py":
+            from .transpiler import PythonTo6502Transpiler, TranspileOptions
+            asm_path = file_path.with_suffix(".asm")
+            opts = TranspileOptions(prg_name=file_path.with_suffix(".prg").name)
+            transpiler = PythonTo6502Transpiler(opts)
+            res = transpiler.transpile(file_path.read_text(encoding="utf-8"))
+            if not res.success:
+                print("Transpilation failed:", file=sys.stderr)
+                for err in res.errors:
+                    print(f"  {err}", file=sys.stderr)
+                sys.exit(1)
+            asm_path.write_text(res.assembly, encoding="utf-8")
+            out = asm_to_tap(asm_path, tap_path=args.output, tape_name=args.name, assembler="kickass")
+            print(f"Transpiled, compiled, and exported TAP image: {out} ({out.stat().st_size} bytes)")
+        else:
+            print(f"Error: Unsupported file format for TAP export: {ext}", file=sys.stderr)
+            sys.exit(1)
         return
 
     if args.command == "transpile":

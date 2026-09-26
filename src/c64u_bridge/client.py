@@ -114,26 +114,31 @@ class C64UClient:
 
     def read_memory(self, address: int, length: int) -> bytes:
         """
-        Read a block of memory from the C64.
+        Read a block of memory from the C64 via DMA.
         
         Args:
             address: 16-bit start address in hex/int (e.g. 0x0400 for Screen RAM, 0xD000 for VIC-II).
             length: Number of bytes to read.
         """
-        url = f"{self.base_url}/machine:read_mem"
         params = {"address": f"{address:04X}", "length": str(length)}
+        headers = self._headers()
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                res = client.get(url, params=params, headers=self._headers())
+                # Official Ultimate 64 endpoint: /machine:readmem (without underscore)
+                url = f"{self.base_url}/machine:readmem"
+                res = client.get(url, params=params, headers=headers)
+                if res.status_code == 404:
+                    # Fallback to alternate naming if on non-standard firmware
+                    res = client.get(f"{self.base_url}/machine:read_mem", params=params, headers=headers)
                 res.raise_for_status()
-                # API returns raw binary or hex string depending on headers
+                # API returns raw binary data
                 return res.content
         except Exception as e:
             raise C64UClientError(f"Failed to read memory at ${address:04X}: {e}") from e
 
     def write_memory(self, address: int, data: Union[bytes, List[int], str]) -> Dict[str, Any]:
         """
-        Write data directly into C64 memory / registers.
+        Write data directly into C64 memory / registers via DMA.
         
         Args:
             address: 16-bit start address.
@@ -146,13 +151,18 @@ class C64UClient:
         else:
             payload = data
 
-        url = f"{self.base_url}/machine:write_mem"
-        params = {"address": f"{address:04X}"}
+        chunk_size = 64
+        headers = self._headers()
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                res = client.post(url, params=params, content=payload, headers=self._headers())
-                res.raise_for_status()
-                return res.json() if res.content else {"status": "success", "bytes_written": len(payload)}
+                url = f"{self.base_url}/machine:writemem"
+                for offset in range(0, len(payload), chunk_size):
+                    chunk = payload[offset : offset + chunk_size]
+                    cur_addr = address + offset
+                    params = {"address": f"{cur_addr:04X}", "data": chunk.hex()}
+                    res = client.put(url, params=params, headers=headers)
+                    res.raise_for_status()
+                return {"status": "success", "bytes_written": len(payload)}
         except Exception as e:
             raise C64UClientError(f"Failed to write memory at ${address:04X}: {e}") from e
 
