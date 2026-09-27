@@ -1,5 +1,5 @@
 // ==============================================================================
-// CHOPLIFTER: RESCUE PROTOCOL
+// HELISCAPE: RESCUE PROTOCOL
 // Advanced Modern Commodore 64 / C64U Tactical Rescue Game
 // Target Assembler: KickAssembler v5.x
 // Architecture: MOS 6510 CPU / VIC-II Video / SID 6581/8580 Audio
@@ -109,11 +109,17 @@ BasicUpstart2(entry_point)
 .const COLOR_LIGHT_GREY = 15
 
 // Game Constants
-.const GROUND_Y         = 209        // Pixel Y coordinate of desert ground (lowered to bottom)
+.const GROUND_Y         = 219        // Pixel Y coordinate of desert ground (lowered to bottom)
 .const BASE_X_MAX       = 84         // Airfield landing pad X boundary
-.const CEILING_Y        = 75         // Maximum altitude (just under HUD)
-.const BARRACKS1_X      = 190       // Compound 1 X position
-.const BARRACKS2_X      = 220        // Compound 2 X position
+.const CEILING_Y        = 78         // Maximum altitude (just under HUD)
+.const BARRACKS1_X      = 184       // Compound 1 X position (Column 20: 24 + 20*8 = 184)
+.const BARRACKS2_X      = 280       // Compound 2 X position (Column 32: 24 + 32*8 = 280)
+
+// PAL default; NTSC builds skip one simulation tick in six video frames.
+.const NTSC = false
+.const SID_CLOCK = NTSC ? 1022727 : 985248
+.const LOGIC_HZ = NTSC ? (59.826 * 5 / 6) : 50.125
+.const MUSIC_RATE = round(120 * 4 * 65536 / (60 * LOGIC_HZ))
 
 // Sprite Pointer Offsets ($3000 / 64 = $C0)
 .const SP_BASE_PTR      = $C0
@@ -227,6 +233,8 @@ zp_ptr_lo:          .byte 0
 zp_ptr_hi:          .byte 0
 zp_tmp:             .byte 0
 zp_joy_state:       .byte 0
+zp_chop_explode_timer: .byte 0   // Countdown frames while exploding
+zp_chop_explode_frame: .byte 0   // 0..3 animated explosion sprite frame
 
 // ==============================================================================
 // ENTRY POINT & INITIALIZATION
@@ -237,19 +245,64 @@ entry_point:
     sei                         // Disable interrupts during setup
     cld                         // Clear decimal mode
 
+    // Establish CPU port direction before mapping KERNAL and I/O.
+    lda #$2f
+    sta $00
     // Standard memory configuration ($37: BASIC + Kernal + I/O)
     lda #$37
     sta $01
 
-    // Reset SID sound chip
+    // Clear entire Zero Page game memory from $02 to $5F to eliminate dirty RAM
+    ldx #$5D
+    lda #0
+clear_zp_loop:
+    sta $02, x
+    dex
+    bpl clear_zp_loop
+
+    // Explicit VIC state: bank 0, screen $0400, upper-case ROM font.
+    lda $dd02
+    ora #3
+    sta $dd02
+    lda $dd00
+    ora #3
+    sta $dd00
+    lda #$14
+    sta VIC_MEMORY_SETUP
+    lda #$08
+    sta VIC_CTRL2
+    lda #0
+    sta VIC_SP_MC_ENABLE
+    sta VIC_SP_ENABLE
+    lda #$7f
+    sta $dd0d
+    lda $dd0d
+    lda #<nmi_return
+    sta $0318
+    lda #>nmi_return
+    sta $0319
+    // Reset SID sound chip & configure master volume
     jsr sid_reset
 
-    // Set border and background
+    // Set standard CIA1 Data Direction Registers
+    lda #$FF
+    sta $DC02                   // Port A = output (keyboard rows)
+    lda #$00
+    sta $DC03                   // Port B = input (keyboard columns & Joy 1)
+    lda #$FF
+    sta $DC00                   // Port A lines idle high ($FF)
+
+    // Set border and background to black
     lda #COLOR_BLACK
     sta VIC_BORDER_COLOR
     sta VIC_BG_COLOR0
     lda #$00
     sta VIC_SP_PRIORITY         // Sprites always in front of background
+    sta VIC_SP_EXP_X            // Clear sprite expansions
+    sta VIC_SP_EXP_Y
+
+    // Pre-initialize game variables so zero page is in a pristine state
+    jsr init_game_variables
 
     // Setup Raster IRQ for rock-solid 50Hz timing
     lda #$7F
@@ -270,10 +323,11 @@ entry_point:
     lda #>irq_handler
     sta $0315
 
-    cli                         // Re-enable interrupts
-
-    // Switch to Title State
+    // Draw while IRQ is disabled: no audio/screen initialization race.
     jsr show_title_screen
+    lda #1
+    sta VIC_IRQ_STATUS
+    cli
 
 main_loop:
     // Check current state
@@ -294,16 +348,8 @@ frame_wait:
     cmp zp_frame_counter
     beq frame_wait
 
-    jsr update_player_input
-    jsr update_chopper_physics
-    jsr update_weapons
-    jsr update_barracks
-    jsr update_hostages
-    jsr update_tank
-    jsr update_jet
-    jsr check_collisions
-    jsr update_hud
-    jsr update_hardware_sprites
+    jsr game_tick
+
     jmp main_loop
 
 check_ended:
@@ -315,6 +361,7 @@ check_ended:
 // MULTI-STAGE RASTER IRQ HANDLER (Dusk Sky Gradient, Shockwave Flash & 50Hz Driver)
 // ==============================================================================
 irq_handler:
+    cld                         // Ensure binary arithmetic mode during interrupt
     asl VIC_IRQ_STATUS          // Acknowledge VIC-II raster interrupt
 
     lda zp_irq_state
@@ -334,48 +381,53 @@ irq_handler:
     lda #1
     sta zp_irq_state
 
-    // Increment global frame counter
-    inc zp_frame_counter
+    jmp $ea81
 
-    // Handle explosion shockwave / flak flash decay
+irq_tick:
+    lda #48
+    sta VIC_RASTER
+    lda #0
+    sta zp_irq_state
+    .if (NTSC) {
+        clc
+        lda video_phase
+        adc #5
+        cmp #6
+        bcs irq_logic_tick
+        sta video_phase
+        jmp $ea81
+irq_logic_tick:
+        sbc #6
+        sta video_phase
+    }
+    inc zp_frame_counter
     lda zp_screen_flash
     beq flash_tick_done
     dec zp_screen_flash
 flash_tick_done:
-
-    // Update Music and SFX
     jsr sid_play_frame
-
-    // Update animated sprite frames
     lda zp_frame_counter
-    and #$01
-    bne irq_skip_rotor
-    inc zp_rotor_frame
-    lda zp_rotor_frame
-    and #$03
+    lsr
+    and #3
     sta zp_rotor_frame
-
-irq_skip_rotor:
     lda zp_frame_counter
-    and #$07
-    bne irq_check_title_anim
-    inc zp_hostage_anim
-    lda zp_hostage_anim
-    and #$03
+    lsr
+    lsr
+    lsr
+    and #3
     sta zp_hostage_anim
-
-irq_check_title_anim:
-    // On Title screen, pulse the logo colors
     lda zp_game_state
-    bne irq_stage0_exit
+    bne irq_tick_done
     jsr animate_title_logo
+irq_tick_done:
+    jmp $ea81
 
-irq_stage0_exit:
-    jmp $ea31
 
 irq_check_sky:
     cmp #1
-    bne irq_horizon_zone
+    beq irq_sky_continue
+    jmp irq_horizon_zone
+irq_sky_continue:
 
     // -------------------------------------------------------------------------
     // IRQ STAGE 1: FLIGHT & COMBAT ZONE (Scanline 74..203)
@@ -388,6 +440,10 @@ irq_check_sky:
     lda zp_screen_flash
     beq sky_normal_color
     tax
+    cpx #5
+    bcc flash_idx_ok
+    ldx #4
+flash_idx_ok:
     lda flash_color_table - 1, x
     sta VIC_BORDER_COLOR
     sta VIC_BG_COLOR0
@@ -407,13 +463,17 @@ sky_is_title:
 
 sky_stage1_done:
     // Next interrupt at scanline 204 (Distant desert mountain horizon)
-    lda #204
+    lda #227
     sta VIC_RASTER
     lda #2
     sta zp_irq_state
-    jmp $ea31
+    jmp $ea81
 
 irq_horizon_zone:
+    cmp #3
+    bne irq_ground_continue
+    jmp irq_tick
+irq_ground_continue:
     // -------------------------------------------------------------------------
     // IRQ STAGE 2: DESERT HORIZON SUNSET GLOW (Scanline 204..214)
     // -------------------------------------------------------------------------
@@ -426,12 +486,12 @@ irq_horizon_zone:
     sta VIC_BG_COLOR0
 
 horizon_done:
-    // Reset next interrupt back to top HUD (scanline 48)
-    lda #48
+    lda #250
     sta VIC_RASTER
-    lda #0
+    lda #3
     sta zp_irq_state
-    jmp $ea31
+    jmp $ea81
+
 
 flash_color_table:
     .byte COLOR_ORANGE, COLOR_YELLOW, COLOR_WHITE, COLOR_WHITE
@@ -479,9 +539,11 @@ show_title_screen:
     jsr clear_screen
     jsr sid_reset
 
-    // Turn off all sprites
+    // Turn off all sprites & clear expansions
     lda #$00
     sta VIC_SP_ENABLE
+    sta VIC_SP_EXP_X
+    sta VIC_SP_EXP_Y
 
     // Draw Title Logo and Briefing Box
     ldx #0
@@ -599,70 +661,71 @@ flash_loop:
     ldx #0
 prompt_print:
     lda prompt_text, x
-    beq check_key_press
+    beq check_keybuf
     sta SCREEN_RAM + 40 * 22 + 4, x
     inx
     bne prompt_print
 
-check_key_press:
-    // Read Joystick 1 (Port B / $DC01)
-    lda #$FF
-    sta $DC02
-    sta $DC00
-    lda #$00
-    sta $DC03
-    lda $DC01
-    and #$1F
-    sta zp_joy_state
-
-    // Read Joystick 2 (Port A / $DC00)
-    lda #$FF
-    sta $DC03
-    sta $DC01
-    lda #$00
-    sta $DC02
-    lda $DC00
-    and #$1F
-    and zp_joy_state
-    sta zp_joy_state
-
-    // Restore CIA1 DDRs for Kernal keyboard scan
-    lda #$FF
-    sta $DC02
-    lda #$00
-    sta $DC03
-
-    // Check Fire button on Joystick 1 OR Joystick 2 (bit 4 = 0 when pressed)
-    lda zp_joy_state
+check_keybuf:
+    lda #$ff
+    sta $dc00
+    lda $dc00
+    and $dc01
     and #$10
-    beq start_new_game
-
-    // Check keyboard key via Kernal GETIN
-    jsr KERNAL_GETIN
-    cmp #0
-    bne start_new_game
+    beq title_pressed
+    lda #$7f
+    sta $dc00
+    lda $dc01
+    and #$10
+    beq title_pressed
+    lda #$fe
+    sta $dc00
+    lda $dc01
+    and #2
+    beq title_pressed
+    lda #$ff
+    sta $dc00
+    lda #1
+    sta restart_armed
     rts
+title_pressed:
+    lda #$ff
+    sta $dc00
+    lda restart_armed
+    beq title_wait_release
+    jmp start_new_game
+title_wait_release:
+    rts
+
 
 start_new_game:
-    // Stop all title music immediately & silence SID voices
+    php
+    sei
+    lda #$ff
+    sta $dc00
     lda #0
-    sta SID_V1_CTRL
-    sta SID_V2_CTRL
-    sta SID_V3_CTRL
-    sta zp_sfx_timer
-    sta zp_sfx_type
-
+    sta VIC_SP_ENABLE
     jsr init_game_variables
+    jsr sid_reset
     jsr draw_gameplay_screen
+    jsr update_hud
+    jsr update_hardware_sprites
+    lda #12
+    sta input_grace
     lda #1
     sta zp_game_state
+    plp
     rts
+
 
 flash_colors:
     .byte COLOR_RED, COLOR_ORANGE, COLOR_YELLOW, COLOR_WHITE, COLOR_CYAN, COLOR_LIGHT_BLUE, COLOR_GREY, COLOR_LIGHT_RED
 
+explosion_color_table:
+    .byte COLOR_YELLOW, COLOR_LIGHT_RED, COLOR_ORANGE, COLOR_DARK_GREY
+
 title_text_0:
-    .text "    === C H O P L I F T E R ==="
+    .text "    === H E L I S C A P E ==="
     .byte 0
 
 title_sub_text:
@@ -674,7 +737,7 @@ brief_line_1:
     .byte 0
 
 brief_line_2:
-    .text "OBJECTIVE: RESCUE HOSTAGES."
+    .text "BOMB 2 CAMPS. RESCUE ALL 16 POWS."
     .byte 0
 
 brief_line_3:
@@ -690,17 +753,26 @@ ctrl_text_2:
     .byte 0
 
 ctrl_text_3:
-    .text "HOVER (FACING CENTER) & DECELERATE TO LAND"
+    .text "RELEASE TO HOVER. DOWN TO LAND."
     .byte 0
 
 prompt_text:
-    .text "   >>> PRESS ANY KEY OR FIRE <<<"
+    .text "SPACE / RETURN / FIRE TO START"
     .byte 0
 
 // ==============================================================================
 // GAMEPLAY ENVIRONMENT INITIALIZATION
 // ==============================================================================
 init_game_variables:
+    lda #0
+    ldx #extra_state_end-extra_state_start-1
+init_extra_state:
+    sta extra_state_start,x
+    dex
+    bpl init_extra_state
+    lda #8
+    sta h1_remaining
+    sta h2_remaining
     // Initial Chopper position: Home base landing pad
     lda #40
     sta zp_chop_x_lo
@@ -721,20 +793,27 @@ init_game_variables:
     lda #0
     sta zp_chop_cargo           // Empty cargo bay
     sta zp_rescued_count        // 0 rescued
+    sta zp_chop_explode_timer
+    sta zp_chop_explode_frame
+    sta zp_screen_flash
+    sta zp_sfx_timer
+    sta zp_sfx_type
+    sta VIC_SP_EXP_X            // Clear sprite expansion in X
+    sta VIC_SP_EXP_Y            // Clear sprite expansion in Y
 
     // Barracks HP
     lda #4
     sta zp_barracks1_hp
     sta zp_barracks2_hp
 
-    // Hostages initially trapped
+    // Hostages initially placed at respective barracks
     lda #1
     sta zp_h1_active
-    lda #BARRACKS1_X + 10
+    lda #<[BARRACKS1_X + 10]
     sta zp_h1_x_lo
-    lda #0
+    lda #>[BARRACKS1_X + 10]
     sta zp_h1_x_hi
-    lda #GROUND_Y
+    lda #GROUND_Y+9
     sta zp_h1_y
     lda #0                      // Trapped
     sta zp_h1_state
@@ -742,11 +821,11 @@ init_game_variables:
 
     lda #1
     sta zp_h2_active
-    lda #BARRACKS2_X + 10
+    lda #<[BARRACKS2_X + 10]    // 290 -> lo = 34
     sta zp_h2_x_lo
-    lda #1                      // Over 255 X
+    lda #>[BARRACKS2_X + 10]    // 290 -> hi = 1 (256 + 34 = 290, at Barracks 2)
     sta zp_h2_x_hi
-    lda #GROUND_Y
+    lda #GROUND_Y+9
     sta zp_h2_y
     lda #0                      // Trapped
     sta zp_h2_state
@@ -759,7 +838,7 @@ init_game_variables:
     sta zp_tank_x_lo
     lda #0
     sta zp_tank_x_hi
-    lda #GROUND_Y - 2
+    lda #GROUND_Y+9
     sta zp_tank_y
     lda #0                      // Moving left
     sta zp_tank_dir
@@ -768,6 +847,10 @@ init_game_variables:
 
     // Jet initially inactive
     lda #0
+    sta zp_jet_y
+    sta zp_jet_x_lo
+    sta zp_jet_x_hi
+    sta zp_jet_dir
     sta zp_jet_active
     lda #120
     sta zp_jet_timer
@@ -839,51 +922,23 @@ mountain_loop:
     bne mountain_loop
 
     // Ground Level (Rows 23..24) - Desert Sand & Concrete Tarmac
-    ldy #23
-ground_row_loop:
-    tya
-    pha                         // Preserve row index Y on stack
-
-    lda screen_row_offsets_lo, y
-    sta zp_ptr_lo
-    lda screen_row_offsets_hi, y
-    sta zp_ptr_hi
-
     ldx #0
 ground_col_loop:
     lda #$A0                    // Solid filled block
-    sta (zp_ptr_lo), x
-
-    // Color RAM equivalent ($D800 - $0400 = $D400 offset)
-    lda zp_ptr_hi
-    clc
-    adc #$D4
-    sta zp_tmp
-    lda zp_tmp
-    sta zp_ptr_hi
+    sta SCREEN_RAM + 40 * 23, x
+    sta SCREEN_RAM + 40 * 24, x
 
     lda #COLOR_ORANGE
     cpx #10
     bcs set_sand_color
     lda #COLOR_GREY             // Friendly base concrete tarmac
 set_sand_color:
-    sta (zp_ptr_lo), x
-
-    // Restore screen ram pointer hi
-    lda zp_tmp
-    sec
-    sbc #$D4
-    sta zp_ptr_hi
+    sta COLOR_RAM + 40 * 23, x
+    sta COLOR_RAM + 40 * 24, x
 
     inx
     cpx #40
     bne ground_col_loop
-
-    pla                         // Restore row index Y
-    tay
-    iny                         // Next row
-    cpy #25
-    bne ground_row_loop
 
     // Draw Friendly Base Structures (Left: Columns 1..9, Row 23 on tarmac)
     // Hospital Triage Bunker: [+MEDIC+]
@@ -909,9 +964,9 @@ draw_barracks_structures:
 b1_loop:
     lda barracks_text, x
     beq draw_b2
-    sta SCREEN_RAM + 40 * 23 + 20, x
+    sta SCREEN_RAM + 40 * 22 + 20, x
     lda #COLOR_LIGHT_RED
-    sta COLOR_RAM + 40 * 23 + 20, x
+    sta COLOR_RAM + 40 * 22 + 20, x
     inx
     bne b1_loop
 
@@ -921,9 +976,9 @@ b1_destroyed:
 b1_rubble:
     lda rubble_text, x
     beq draw_b2
-    sta SCREEN_RAM + 40 * 23 + 20, x
+    sta SCREEN_RAM + 40 * 22 + 20, x
     lda #COLOR_BROWN
-    sta COLOR_RAM + 40 * 23 + 20, x
+    sta COLOR_RAM + 40 * 22 + 20, x
     inx
     bne b1_rubble
 
@@ -935,9 +990,9 @@ draw_b2:
 b2_loop:
     lda barracks_text, x
     beq barracks_done
-    sta SCREEN_RAM + 40 * 23 + 32, x
+    sta SCREEN_RAM + 40 * 22 + 32, x
     lda #COLOR_LIGHT_RED
-    sta COLOR_RAM + 40 * 23 + 32, x
+    sta COLOR_RAM + 40 * 22 + 32, x
     inx
     bne b2_loop
 
@@ -946,9 +1001,9 @@ b2_destroyed:
 b2_rubble:
     lda rubble_text, x
     beq barracks_done
-    sta SCREEN_RAM + 40 * 23 + 32, x
+    sta SCREEN_RAM + 40 * 22 + 32, x
     lda #COLOR_BROWN
-    sta COLOR_RAM + 40 * 23 + 32, x
+    sta COLOR_RAM + 40 * 22 + 32, x
     inx
     bne b2_rubble
 
@@ -972,39 +1027,194 @@ barracks_text:
     .byte 0
 
 rubble_text:
-    .text "...:... "
+    .text "...:..."
     .byte 0
 
 // ==============================================================================
 // PLAYER INPUT HANDLING (JOYSTICK PORT 1 & 2 + KEYBOARD)
 // ==============================================================================
 update_player_input:
+    // Inhibit controls while chopper is exploding
+    lda zp_chop_explode_timer
+    beq player_ctrl_ok
+    rts
+
+player_ctrl_ok:
     // -------------------------------------------------------------------------
     // Dual Joystick Read: Port 1 ($DC01) and Port 2 ($DC00)
     // -------------------------------------------------------------------------
-    // Step 1: Read Joystick 1 (Port B / $DC01)
     lda #$FF
-    sta $DC02                   // Port A = output $FF (prevent matrix cross-talk)
-    sta $DC00
-    lda #$00
-    sta $DC03                   // Port B = input
-    lda $DC01
+    sta $DC00                   // Deselect all keyboard rows
+    lda $DC00                   // Read Joystick 2 (Port A)
+    and $DC01                   // Read Joystick 1 (Port B)
     and #$1F
-    sta zp_joy_state
-
-    // Step 2: Read Joystick 2 (Port A / $DC00)
-    lda #$FF
-    sta $DC03                   // Port B = output $FF
-    sta $DC01
-    lda #$00
-    sta $DC02                   // Port A = input
-    lda $DC00
-    and #$1F
-    and zp_joy_state
     sta zp_tmp                  // Combined: Bit 0=Up, 1=Dn, 2=L, 3=R, 4=Fire (0 = active)
+
+    // -------------------------------------------------------------------------
+    // Scan Keyboard Matrix (W/S/A/D, Cursors, Space, Return)
+    // -------------------------------------------------------------------------
+
+    lda zp_tmp
+    cmp #$1f
+    beq scan_keyboard
+    jmp controls_ready
+scan_keyboard:
+    // Check Row PA1 ($FD): W (PB1), A (PB2), S (PB5), Left Shift (PB7)
+    lda #$FD
+    sta $DC00
+    lda $DC01
+    tax                         // Save PA1 columns in X
+    sta zp_joy_state            // Save bit 7 (Left Shift) for cursor keys
+
+    // Check W (PB1 -> Bit 0: UP)
+    txa
+    and #%00000010
+    bne inp_skip_w
+    lda zp_tmp
+    and #%11111110              // Bit 0 = 0 (UP active)
+    sta zp_tmp
+inp_skip_w:
+
+    // Check S (PB5 -> Bit 1: DOWN)
+    txa
+    and #%00100000
+    bne inp_skip_s
+    lda zp_tmp
+    and #%11111101              // Bit 1 = 0 (DOWN active)
+    sta zp_tmp
+inp_skip_s:
+
+    // Check A (PB2 -> Bit 2: LEFT)
+    txa
+    and #%00000100
+    bne inp_skip_a
+    lda zp_tmp
+    and #%11111011              // Bit 2 = 0 (LEFT active)
+    sta zp_tmp
+inp_skip_a:
+
+    // Check Row PA2 ($FB): D (PB2)
+    lda #$FB
+    sta $DC00
+    lda $DC01
+    and #%00000100              // PB2 is D -> Bit 3: RIGHT
+    bne inp_skip_d
+    lda zp_tmp
+    and #%11110111              // Bit 3 = 0 (RIGHT active)
+    sta zp_tmp
+inp_skip_d:
+
+    // Check Row PA7 ($7F): Space (PB4), Left-Arrow (PB1)
+    lda #$7F
+    sta $DC00
+    lda $DC01
+    tax
+    // Check Space (PB4 -> Bit 4: FIRE)
+    and #%00010000
+    bne inp_skip_space
+    lda zp_tmp
+    and #%11101111              // Bit 4 = 0 (FIRE active)
+    sta zp_tmp
+inp_skip_space:
+    // Check Left-Arrow key (PB1 -> Bit 2: LEFT)
+    txa
+    and #%00000010
+    bne inp_skip_left_arr
+    lda zp_tmp
+    and #%11111011              // Bit 2 = 0 (LEFT active)
+    sta zp_tmp
+inp_skip_left_arr:
+
+    lda #$bf
+    sta $dc00
+    lda $dc01
+    and #$10
+    bne right_shift_done
+    lda zp_joy_state
+    and #$7f
+    sta zp_joy_state
+right_shift_done:
+    // Check Row PA0 ($FE): Cursor Up/Down (PB7), Cursor Left/Right (PB2), Return (PB1)
+    lda #$FE
+    sta $DC00
+    lda $DC01
+    tax
+
+    // Check Return (PB1 -> Bit 4: FIRE)
+    and #%00000010
+    bne inp_skip_ret
+    lda zp_tmp
+    and #%11101111              // Bit 4 = 0 (FIRE active)
+    sta zp_tmp
+inp_skip_ret:
+
+    // Check Cursor Up/Down (PB7)
+    txa
+    and #%10000000
+    bne inp_skip_crsr_ud
+    lda zp_joy_state            // Bit 7 is Left Shift (0 = pressed)
+    bpl inp_crsr_up             // Shift pressed -> Cursor UP
+    // Shift NOT pressed -> Cursor DOWN
+    lda zp_tmp
+    and #%11111101              // Bit 1 = 0 (DOWN active)
+    sta zp_tmp
+    jmp inp_skip_crsr_ud
+inp_crsr_up:
+    lda zp_tmp
+    and #%11111110              // Bit 0 = 0 (UP active)
+    sta zp_tmp
+inp_skip_crsr_ud:
+
+    // Check Cursor Left/Right (PB2)
+    txa
+    and #%00000100
+    bne inp_skip_crsr_lr
+    lda zp_joy_state            // Bit 7 is Left Shift (0 = pressed)
+    bpl inp_crsr_left           // Shift pressed -> Cursor LEFT
+    // Shift NOT pressed -> Cursor RIGHT
+    lda zp_tmp
+    and #%11110111              // Bit 3 = 0 (RIGHT active)
+    sta zp_tmp
+    jmp inp_skip_crsr_lr
+inp_crsr_left:
+    lda zp_tmp
+    and #%11111011              // Bit 2 = 0 (LEFT active)
+    sta zp_tmp
+inp_skip_crsr_lr:
+
+    // Check Row PA6 ($BF): Up-Arrow '^' (PB6)
+    lda #$BF
+    sta $DC00
+    lda $DC01
+    and #%01000000              // PB6 is Up-Arrow -> Bit 0: UP
+    bne inp_skip_up_arr
+    lda zp_tmp
+    and #%11111110              // Bit 0 = 0 (UP active)
+    sta zp_tmp
+inp_skip_up_arr:
+
+    // Always restore Port A to idle high ($FF)
+    lda #$FF
+    sta $DC00
 
 
     //  -------------------------------------------------------------------------
+controls_ready:
+    // Cancel contradictory directions (e.g. two controllers held oppositely).
+    lda zp_tmp
+    and #3
+    bne vertical_input_ok
+    lda zp_tmp
+    ora #3
+    sta zp_tmp
+vertical_input_ok:
+    lda zp_tmp
+    and #12
+    bne horizontal_input_ok
+    lda zp_tmp
+    ora #12
+    sta zp_tmp
+horizontal_input_ok:
     // 1. Check UP (Thrust / Liftoff)
     // -------------------------------------------------------------------------
     lda zp_tmp
@@ -1175,26 +1385,143 @@ fire_done:
 // HELICOPTER INERTIAL PHYSICS & TOUCHDOWN LOGIC
 // ==============================================================================
 update_chopper_physics:
+    lda zp_chop_explode_timer
+    beq normal_chopper_physics
+
+    // Chopper is currently exploding!
+    dec zp_chop_explode_timer
+    bne chop_exploding_active
+
+    // Explosion has finished -> Transition to Game Over
+    lda #0
+    sta VIC_SP_EXP_X            // Clear sprite expansions
+    sta VIC_SP_EXP_Y
+    lda #2                      // Game Over State
+    sta zp_game_state
+    jsr show_game_over_banner
+    rts
+
+chop_exploding_active:
+    // Wreckage slowly drifts downward if above ground
+    lda zp_frame_counter
+    and #$01
+    bne skip_wreck_fall
+    lda zp_chop_y
+    cmp #GROUND_Y
+    bcs skip_wreck_fall
+    inc zp_chop_y
+skip_wreck_fall:
+
+    // Cycle through 4 explosion animation frames (12 frames per stage: 0 -> 1 -> 2 -> 3)
+    lda #48
+    sec
+    sbc zp_chop_explode_timer   // 0 .. 47
+    cmp #12
+    bcc set_exp_f0
+    cmp #24
+    bcc set_exp_f1
+    cmp #36
+    bcc set_exp_f2
+    lda #3
+    jmp set_exp_f_done
+set_exp_f2:
+    lda #2
+    jmp set_exp_f_done
+set_exp_f1:
+    lda #1
+    jmp set_exp_f_done
+set_exp_f0:
+    lda #0
+set_exp_f_done:
+    sta zp_chop_explode_frame
+    rts
+
+normal_chopper_physics:
     lda zp_chop_landed
-    beq chopper_in_flight
-    // If landed, zero velocities
+    bne chopper_is_landed
+    jmp chopper_in_flight
+
+chopper_is_landed:
+    // If landed, zero velocities and check continuous boarding/rescue interactions
     lda #0
     sta zp_chop_vx
     sta zp_chop_vy
+    jsr check_landing_interactions
     rts
 
+trigger_chopper_explosion:
+    lda zp_chop_explode_timer
+    bne already_exploding
+    lda #48                     // 48 frames of explosion (~1 second)
+    sta zp_chop_explode_timer
+    lda #0
+    sta zp_chop_explode_frame
+    sta zp_chop_shield          // Shield = 0
+    sta zp_chop_vx              // Stop horizontal velocity
+    sta zp_chop_vy
+    lda #2
+    ldx #48
+    jsr request_sfx
+    lda #4                      // Screen flash shockwave (4 frames)
+    sta zp_screen_flash
+already_exploding:
+    rts
+
+show_game_over_banner:
+    lda #0
+    sta restart_armed
+    sta VIC_SP_ENABLE
+    jsr update_hud
+    ldx #0
+go_txt_loop1:
+    lda game_over_line1, x
+    beq go_txt_line2
+    sta SCREEN_RAM + 40 * 11 + 9, x
+    lda #COLOR_LIGHT_RED
+    sta COLOR_RAM + 40 * 11 + 9, x
+    inx
+    bne go_txt_loop1
+
+go_txt_line2:
+    ldx #0
+go_txt_loop2:
+    lda game_over_line2, x
+    beq go_txt_done
+    sta SCREEN_RAM + 40 * 13 + 1, x
+    lda #COLOR_YELLOW
+    sta COLOR_RAM + 40 * 13 + 1, x
+    inx
+    bne go_txt_loop2
+go_txt_done:
+    rts
+
+game_over_line1:
+    .text "*** MISSION FAILED ***"
+    .byte 0
+
+game_over_line2:
+    .text "RELEASE, THEN SPACE / RETURN / FIRE"
+    .byte 0
+
 chopper_in_flight:
-    // Apply gentle gravity downwards every 4 frames
+    // Rotor-assisted hover: releasing vertical input damps to zero.
+    // Up/down input has already set the velocity; do not fight it with gravity.
+    lda zp_tmp
+    and #3
+    cmp #3
+    bne skip_gravity
     lda zp_frame_counter
-    and #$03
+    and #1
     bne skip_gravity
     lda zp_chop_vy
-    bmi apply_gravity
-    cmp #5                      // Terminal fall speed
-    bcs skip_gravity
-apply_gravity:
+    beq skip_gravity
+    bmi hover_brake_up
+    dec zp_chop_vy
+    jmp skip_gravity
+hover_brake_up:
     inc zp_chop_vy
 skip_gravity:
+
 
     // Integrate Horizontal Velocity (Whole pixels)
     lda zp_chop_vx
@@ -1222,9 +1549,9 @@ clamp_x_max:
     lda zp_chop_x_hi
     beq apply_y_physics
     lda zp_chop_x_lo
-    cmp #80
+    cmp #64
     bcc apply_y_physics
-    lda #80
+    lda #64
     sta zp_chop_x_lo
     lda #0
     sta zp_chop_vx
@@ -1295,14 +1622,28 @@ landing_vx_ok:
     rts
 
 chopper_crashed:
-    // Crash explosion and shield deduction
-    dec zp_chop_shield
-    dec zp_chop_shield
-    lda #2                      // SFX: Explosion
-    sta zp_sfx_type
-    lda #30
-    sta zp_sfx_timer
-    lda #4
+    // Crash impact: Deduct 2 shield bars
+    lda zp_chop_shield
+    sec
+    sbc #2
+    bcs crash_shield_ok
+    lda #0
+crash_shield_ok:
+    sta zp_chop_shield
+    bne crash_survived
+
+    // Fatal crash -> Trigger full graphical explosion!
+    lda #GROUND_Y - 4
+    sta zp_chop_y
+    jsr trigger_chopper_explosion
+    rts
+
+crash_survived:
+    // Non-fatal hard landing: minor explosion SFX and bounce
+    lda #2
+    ldx #20
+    jsr request_sfx
+    lda #3
     sta zp_screen_flash
     lda #GROUND_Y - 8
     sta zp_chop_y
@@ -1337,6 +1678,15 @@ check_landing_interactions:
     lda zp_chop_cargo
     beq base_done
 
+    // Award 100 points per person before transferring the cargo.
+    ldy zp_chop_cargo
+rescue_score_loop:
+    lda #100
+    ldx #0
+    jsr add_score
+    dey
+    bne rescue_score_loop
+    lda zp_chop_cargo
     // Transfer cargo to rescued count
     clc
     adc zp_rescued_count
@@ -1345,10 +1695,9 @@ check_landing_interactions:
     sta zp_chop_cargo
 
     // Play Victory Fanfare / Chime
-    lda #3                      // SFX: Hostage rescue chime
-    sta zp_sfx_type
-    lda #40
-    sta zp_sfx_timer
+    lda #3
+    ldx #40
+    jsr request_sfx
 
     // Check if all 16 hostages rescued -> VICTORY!
     lda zp_rescued_count
@@ -1356,6 +1705,7 @@ check_landing_interactions:
     bcc base_done
     lda #3                      // Victory state
     sta zp_game_state
+    jsr show_victory_banner
 
 base_done:
     rts
@@ -1386,10 +1736,9 @@ player_fire_weapon:
     bne fire_already_active
 
     // Fire sound effect
-    lda #1                      // SFX: Vulcan cannon
-    sta zp_sfx_type
-    lda #10
-    sta zp_sfx_timer
+    lda #1
+    ldx #10
+    jsr request_sfx
 
     // Activate bullet
     lda #1
@@ -1465,10 +1814,25 @@ bullet_vx_pos:
     inc zp_bullet_x_hi
 
 bullet_ground_check:
+    lda zp_bullet_x_hi
+    cmp #2
+    bcs bullet_dead
+    cmp #1
+    bne bullet_left_bound
+    lda zp_bullet_x_lo
+    cmp #88
+    bcs bullet_dead
+    jmp bullet_y_bound
+bullet_left_bound:
+    lda zp_bullet_x_lo
+    cmp #12
+    bcc bullet_dead
+bullet_y_bound:
     lda zp_bullet_y
-    cmp #GROUND_Y + 4
+    cmp #GROUND_Y + 21
     bcc update_enemy_shell
-    // Hit ground: Deactivate
+bullet_dead:
+    // Hit ground or left/right screen edge.
     lda #0
     sta zp_bullet_active
 
@@ -1502,9 +1866,25 @@ shell_vx_pos:
     inc zp_shell_x_hi
 
 shell_bounds_check:
-    // Despawn if out of bounds or hits ground
+    lda zp_shell_x_hi
+    cmp #2
+    bcs shell_dead
+    cmp #1
+    bne shell_original_bounds
+    lda zp_shell_x_lo
+    cmp #88
+    bcs shell_dead
+shell_original_bounds:
+    // Despawn if out of bounds, hits ground, or enters friendly base perimeter
+    lda zp_shell_x_hi
+    bne shell_x_in_field
+    lda zp_shell_x_lo
+    cmp #BASE_X_MAX
+    bcc shell_dead              // Flak burns out before entering base pad
+
+shell_x_in_field:
     lda zp_shell_y
-    cmp #GROUND_Y + 4
+    cmp #GROUND_Y + 21
     bcs shell_dead
     cmp #CEILING_Y - 10
     bcc shell_dead
@@ -1529,22 +1909,21 @@ update_barracks:
     lda zp_bullet_x_hi
     bne check_b2_bullet
     lda zp_bullet_x_lo
-    cmp #BARRACKS1_X - 10
+    cmp #BARRACKS1_X - 8
     bcc check_b2_bullet
-    cmp #BARRACKS1_X + 24
+    cmp #BARRACKS1_X + 48
     bcs check_b2_bullet
     lda zp_bullet_y
-    cmp #GROUND_Y - 10
+    cmp #GROUND_Y + 6
     bcc check_b2_bullet
 
     // Hit Barracks 1!
     dec zp_barracks1_hp
     lda #0
     sta zp_bullet_active
-    lda #2                      // SFX: Explosion
-    sta zp_sfx_type
-    lda #20
-    sta zp_sfx_timer
+    lda #2
+    ldx #20
+    jsr request_sfx
     lda #3
     sta zp_screen_flash
     jsr draw_barracks_structures
@@ -1552,6 +1931,9 @@ update_barracks:
     // If destroyed, release Hostage 1!
     lda zp_barracks1_hp
     bne check_b2_bullet
+    lda #250
+    ldx #0
+    jsr add_score
     lda #1                      // Waving / Escaped state
     sta zp_h1_state
 
@@ -1562,30 +1944,33 @@ check_b2_bullet:
     lda zp_barracks2_hp
     beq barracks_done2
     lda zp_bullet_x_hi
-    beq barracks_done2          // Barracks 2 is > 255 X
+    cmp #1
+    bne barracks_done2          // Require the actual high byte, not merely nonzero
     lda zp_bullet_x_lo
-    cmp #BARRACKS2_X - 256 - 10
+    cmp #<[BARRACKS2_X - 256 - 8]
     bcc barracks_done2
-    cmp #BARRACKS2_X - 256 + 24
+    cmp #<[BARRACKS2_X - 256 + 48]
     bcs barracks_done2
     lda zp_bullet_y
-    cmp #GROUND_Y - 10
+    cmp #GROUND_Y + 6
     bcc barracks_done2
 
     // Hit Barracks 2!
     dec zp_barracks2_hp
     lda #0
     sta zp_bullet_active
-    lda #2                      // SFX: Explosion
-    sta zp_sfx_type
-    lda #20
-    sta zp_sfx_timer
+    lda #2
+    ldx #20
+    jsr request_sfx
     lda #3
     sta zp_screen_flash
     jsr draw_barracks_structures
 
     lda zp_barracks2_hp
     bne barracks_done2
+    lda #250
+    ldx #0
+    jsr add_score
     lda #1                      // Release Hostage 2!
     sta zp_h2_state
 
@@ -1596,6 +1981,26 @@ barracks_done2:
 // HOSTAGE AI (Waving, Running, Boarding)
 // ==============================================================================
 update_hostages:
+    lda zp_chop_explode_timer
+    bne hostages_wait
+    lda zp_chop_landed
+    cmp #1
+    beq hostages_may_board
+hostages_wait:
+    lda zp_h1_state
+    cmp #2
+    bne hostages_wait_h2
+    lda #1
+    sta zp_h1_state
+hostages_wait_h2:
+    lda zp_h2_state
+    cmp #2
+    bne hostages_wait_done
+    lda #1
+    sta zp_h2_state
+hostages_wait_done:
+    rts
+hostages_may_board:
     // Update Hostage 1
     lda zp_h1_active
     beq check_h2_ai
@@ -1628,14 +2033,23 @@ h1_running_ai:
     cmp #16
     bcs h1_full                 // Cargo full
     inc zp_chop_cargo
-    lda #0                      // Inactive (now inside chopper)
+    dec h1_remaining
+    bne h1_next_person
+    lda #0
     sta zp_h1_active
     sta zp_h1_state
-    // Play Boarding Chime
+    jmp h1_board_chime
+h1_next_person:
+    lda #<[BARRACKS1_X+10]
+    sta zp_h1_x_lo
+    lda #>[BARRACKS1_X+10]
+    sta zp_h1_x_hi
+    lda #1
+    sta zp_h1_state
+h1_board_chime:
     lda #3
-    sta zp_sfx_type
-    lda #15
-    sta zp_sfx_timer
+    ldx #15
+    jsr request_sfx
 h1_full:
     jmp check_h2_ai
 
@@ -1680,13 +2094,23 @@ check_h2_ai:
     cmp #16
     bcs hostage_done
     inc zp_chop_cargo
+    dec h2_remaining
+    bne h2_next_person
     lda #0
     sta zp_h2_active
     sta zp_h2_state
+    jmp h2_board_chime
+h2_next_person:
+    lda #<[BARRACKS2_X+10]
+    sta zp_h2_x_lo
+    lda #>[BARRACKS2_X+10]
+    sta zp_h2_x_hi
+    lda #1
+    sta zp_h2_state
+h2_board_chime:
     lda #3
-    sta zp_sfx_type
-    lda #15
-    sta zp_sfx_timer
+    ldx #15
+    jsr request_sfx
     rts
 
 h2_run_right:
@@ -1751,6 +2175,16 @@ tank_fire_check:
     lda zp_shell_active
     bne tank_done
 
+    // Sanctuary: Do not fire if chopper is landed safely at base pad
+    lda zp_chop_landed
+    beq tank_can_fire
+    lda zp_chop_x_hi
+    bne tank_can_fire
+    lda zp_chop_x_lo
+    cmp #BASE_X_MAX
+    bcc tank_done
+
+tank_can_fire:
     // Aim and fire shell upward at chopper!
     lda #1
     sta zp_shell_active
@@ -1768,10 +2202,15 @@ tank_fire_check:
     // Arc velocity
     lda #$FE                    // Moving up (-2)
     sta zp_shell_vy
-    // Aim towards chopper X
+    // Aim using the full X coordinate, including the right-hand screen page.
+    lda zp_chop_x_hi
+    cmp zp_tank_x_hi
+    bcc fire_left
+    bne fire_right
     lda zp_chop_x_lo
     cmp zp_tank_x_lo
     bcc fire_left
+fire_right:
     lda #2
     sta zp_shell_vx
     jmp fire_tank_sfx
@@ -1780,10 +2219,9 @@ fire_left:
     sta zp_shell_vx
 
 fire_tank_sfx:
-    lda #2                      // Boom SFX
-    sta zp_sfx_type
-    lda #15
-    sta zp_sfx_timer
+    lda #2
+    ldx #15
+    jsr request_sfx
 
 tank_done:
     rts
@@ -1930,10 +2368,9 @@ jet_bomb_right:
 
 jet_fire_sfx:
     // Sound effect
-    lda #1                      // SFX: Launch / fire
-    sta zp_sfx_type
-    lda #12
-    sta zp_sfx_timer
+    lda #1
+    ldx #12
+    jsr request_sfx
 
 jet_check_bounds:
     lda zp_jet_dir
@@ -1978,27 +2415,41 @@ jet_height_table:
 // COLLISION DETECTION & DAMAGE
 // ==============================================================================
 check_collisions:
+    lda zp_chop_explode_timer
+    beq collisions_alive
+    rts
+collisions_alive:
     // 1. Check if tank shell or jet bomb hits helicopter
     lda zp_shell_active
     beq check_player_bullet_hit
 
-    lda zp_shell_x_hi
-    cmp zp_chop_x_hi
-    bne check_player_bullet_hit
+    // Base Pad Sanctuary: Helicopter parked safely at home base cannot be hit!
+    lda zp_chop_landed
+    beq chopper_can_be_hit
+    lda zp_chop_x_hi
+    bne chopper_can_be_hit
+    lda zp_chop_x_lo
+    cmp #BASE_X_MAX
+    bcc check_player_bullet_hit // Protected in home base hangar!
 
+chopper_can_be_hit:
     lda zp_shell_x_lo
-    sec
-    sbc zp_chop_x_lo
-    clc
-    adc #12                     // Centering
-    cmp #24
-    bcs check_player_bullet_hit
+    sta collision_a_lo
+    lda zp_shell_x_hi
+    sta collision_a_hi
+    lda zp_chop_x_lo
+    sta collision_b_lo
+    lda zp_chop_x_hi
+    sta collision_b_hi
+    lda #12
+    jsr collision_x
+    bcc check_player_bullet_hit
 
     lda zp_shell_y
     sec
     sbc zp_chop_y
     clc
-    adc #10
+    adc #3                     // Shell pixels y+1..3 vs body y..y+16.
     cmp #20
     bcs check_player_bullet_hit
 
@@ -2006,77 +2457,68 @@ check_collisions:
     lda #0
     sta zp_shell_active
 
-    lda zp_shell_shooter
-    bne hit_by_jet_bomb
-
-    // -------------------------------------------------------------------------
-    // Hit by Tank Bullet: Instant Game Over!
-    // -------------------------------------------------------------------------
-    sta zp_chop_shield          // Shield = 0
-    lda #2                      // Heavy Explosion SFX
-    sta zp_sfx_type
-    lda #45
-    sta zp_sfx_timer
-    lda #4
-    sta zp_screen_flash
-    lda #2                      // Game Over State
-    sta zp_game_state
-    rts
-
-hit_by_jet_bomb:
-    // -------------------------------------------------------------------------
-    // Hit by Jet Bomb: 50% shield damage (4 bars; 2 hits = Game Over!)
-    // -------------------------------------------------------------------------
-    lda #2                      // Explosion SFX
-    sta zp_sfx_type
-    lda #30
-    sta zp_sfx_timer
-    lda #4
-    sta zp_screen_flash
-
+    // Deduct shield: Tank shell = 2 bars (25%), Jet bomb = 4 bars (50%)
+    lda #2                      // Tank shell damage (2 of 8 bars)
+    ldx zp_shell_shooter
+    beq apply_shell_damage
+    lda #4                      // Jet bomb damage (4 of 8 bars)
+apply_shell_damage:
+    sta zp_tmp
     lda zp_chop_shield
     sec
-    sbc #4                      // Deduct 50% (4 of 8 bars)
-    bcs shield_remains
+    sbc zp_tmp
+    bcs shell_shield_ok
     lda #0
-shield_remains:
+shell_shield_ok:
     sta zp_chop_shield
-    bne check_player_bullet_hit // Still alive!
+    bne shell_survived
 
-    // 2 hits depleted shield: Game Over!
-    lda #2
-    sta zp_game_state
+    // Shield depleted -> Trigger Chopper Explosion!
+    jsr trigger_chopper_explosion
     rts
+
+shell_survived:
+    lda #2
+    ldx #25
+    jsr request_sfx
+    lda #3
+    sta zp_screen_flash
+    jmp check_player_bullet_hit
 
 check_player_bullet_hit:
     // Check if player bullet hits Jet or Tank
     lda zp_bullet_active
-    beq check_chopper_jet_collision
+    bne long_branch_skip_0
+    jmp check_chopper_jet_collision
+long_branch_skip_0:
 
     // 1. Check bullet vs Jet
     lda zp_jet_active
     beq check_player_bullet_tank
 
-    lda zp_bullet_x_hi
-    cmp zp_jet_x_hi
-    bne check_player_bullet_tank
-
     lda zp_bullet_x_lo
-    sec
-    sbc zp_jet_x_lo
-    clc
-    adc #12
-    cmp #24
-    bcs check_player_bullet_tank
+    sta collision_a_lo
+    lda zp_bullet_x_hi
+    sta collision_a_hi
+    lda zp_jet_x_lo
+    sta collision_b_lo
+    lda zp_jet_x_hi
+    sta collision_b_hi
+    lda #12
+    jsr collision_x
+    bcc check_player_bullet_tank
 
     lda zp_bullet_y
     sec
     sbc zp_jet_y
     clc
-    adc #8
-    cmp #16
+    adc #3
+    cmp #18
     bcs check_player_bullet_tank
 
+    lda #<500
+    ldx #>500
+    jsr add_score
     // Jet shot down in mid-air!
     lda #0
     sta zp_bullet_active
@@ -2087,10 +2529,9 @@ check_player_bullet_hit:
     clc
     adc #150
     sta zp_jet_timer
-    lda #2                      // Heavy Explosion SFX
-    sta zp_sfx_type
-    lda #40
-    sta zp_sfx_timer
+    lda #2
+    ldx #40
+    jsr request_sfx
     lda #4
     sta zp_screen_flash
     jmp check_chopper_jet_collision
@@ -2100,30 +2541,36 @@ check_player_bullet_tank:
     lda zp_tank_active
     beq check_chopper_jet_collision
 
-    lda zp_bullet_x_hi
-    cmp zp_tank_x_hi
-    bne check_chopper_jet_collision
-
     lda zp_bullet_x_lo
-    sec
-    sbc zp_tank_x_lo
-    clc
-    adc #10
-    cmp #20
-    bcs check_chopper_jet_collision
-
-    lda zp_bullet_y
-    cmp #GROUND_Y - 14
+    sta collision_a_lo
+    lda zp_bullet_x_hi
+    sta collision_a_hi
+    lda zp_tank_x_lo
+    sta collision_b_lo
+    lda zp_tank_x_hi
+    sta collision_b_hi
+    lda #12
+    jsr collision_x
     bcc check_chopper_jet_collision
 
+    lda zp_bullet_y
+    sec
+    sbc zp_tank_y
+    clc
+    adc #4
+    cmp #14
+    bcs check_chopper_jet_collision
+
+    lda #200
+    ldx #0
+    jsr add_score
     // Tank destroyed!
     lda #0
     sta zp_bullet_active
     sta zp_tank_active
     lda #2
-    sta zp_sfx_type
-    lda #40
-    sta zp_sfx_timer
+    ldx #40
+    jsr request_sfx
     lda #4
     sta zp_screen_flash
 
@@ -2132,24 +2579,24 @@ check_chopper_jet_collision:
     lda zp_jet_active
     beq check_player_shield_status
 
-    lda zp_chop_x_hi
-    cmp zp_jet_x_hi
-    bne check_player_shield_status
-
     lda zp_chop_x_lo
-    sec
-    sbc zp_jet_x_lo
-    clc
-    adc #14
-    cmp #28
-    bcs check_player_shield_status
+    sta collision_a_lo
+    lda zp_chop_x_hi
+    sta collision_a_hi
+    lda zp_jet_x_lo
+    sta collision_b_lo
+    lda zp_jet_x_hi
+    sta collision_b_hi
+    lda #20
+    jsr collision_x
+    bcc check_player_shield_status
 
     lda zp_chop_y
     sec
     sbc zp_jet_y
     clc
-    adc #10
-    cmp #20
+    adc #16                    // New body is 17 pixels tall; jet is 15.
+    cmp #31
     bcs check_player_shield_status
 
     // Mid-air collision with Jet!
@@ -2160,10 +2607,9 @@ check_chopper_jet_collision:
     clc
     adc #150
     sta zp_jet_timer
-    lda #2                      // Heavy Explosion SFX
-    sta zp_sfx_type
-    lda #45
-    sta zp_sfx_timer
+    lda #2
+    ldx #45
+    jsr request_sfx
     lda #5
     sta zp_screen_flash
 
@@ -2175,18 +2621,17 @@ check_chopper_jet_collision:
 chopper_collision_ok:
     sta zp_chop_shield
     bne check_player_shield_status
-    // Shield depleted: Game Over!
-    lda #2
-    sta zp_game_state
+    // Shield depleted from mid-air collision -> Explode!
+    jsr trigger_chopper_explosion
     rts
 
 check_player_shield_status:
+    lda zp_chop_explode_timer
+    bne no_game_over            // Already exploding: do not re-trigger
     lda zp_chop_shield
     bne no_game_over
-    // Shield depleted: Game Over!
-    lda #2
-    sta zp_game_state
-
+    // Shield depleted -> Explode!
+    jsr trigger_chopper_explosion
 no_game_over:
     rts
 
@@ -2194,6 +2639,8 @@ no_game_over:
 // HUD DISPLAY UPDATE (Score, Hostages, Shield)
 // ==============================================================================
 update_hud:
+    jsr draw_score
+    jsr draw_radar
     // Update Rescued Count display (Row 0, col 21)
     lda zp_rescued_count
     jsr convert_to_bcd
@@ -2305,8 +2752,56 @@ update_hardware_sprites:
     sta VIC_MSB_X
 
     // -------------------------------------------------------------------------
-    // Sprite 0: Chopper Fuselage
+    // Sprite 0: Chopper Fuselage OR Destruction Explosion
     // -------------------------------------------------------------------------
+    lda zp_chop_explode_timer
+    beq normal_sp0_rendering
+
+    // HELICOPTER EXPLODING:
+    // Expand Sprite 0 in X and Y for a massive cinematic explosion!
+    lda VIC_SP_EXP_X
+    ora #%00000001
+    sta VIC_SP_EXP_X
+    lda VIC_SP_EXP_Y
+    ora #%00000001
+    sta VIC_SP_EXP_Y
+
+    lda zp_chop_x_lo
+    sta VIC_SP0_X
+    lda zp_chop_y
+    sta VIC_SP0_Y
+    lda zp_chop_x_hi
+    beq sp0_exp_msb_done
+    lda VIC_MSB_X
+    ora #%00000001
+    sta VIC_MSB_X
+sp0_exp_msb_done:
+
+    // Set animated explosion frame
+    lda zp_chop_explode_frame
+    clc
+    adc #SP_EXPLODE_BASE
+    sta SPRITE_PTR_BASE + 0
+
+    // Cycle fiery colors: Yellow -> Light Red -> Orange -> Dark Grey
+    ldx zp_chop_explode_frame
+    lda explosion_color_table, x
+    sta VIC_SP0_COLOR
+
+    // Hide Sprite 1 (rotor blades destroyed)
+    lda #0
+    sta VIC_SP1_Y
+    jmp setup_sp2
+
+normal_sp0_rendering:
+    // Ensure Sprite 0 is unexpanded
+    lda VIC_SP_EXP_X
+    and #%11111110
+    sta VIC_SP_EXP_X
+    lda VIC_SP_EXP_Y
+    and #%11111110
+    sta VIC_SP_EXP_Y
+
     lda zp_chop_x_lo
     sta VIC_SP0_X
     lda zp_chop_y
@@ -2330,7 +2825,7 @@ sp0_facing_left:
     ldx #SP_CHOPPER_L
 set_sp0_ptr:
     stx SPRITE_PTR_BASE + 0
-    lda #COLOR_WHITE
+    lda #COLOR_DARK_GREY
     sta VIC_SP0_COLOR
 
     // -------------------------------------------------------------------------
@@ -2340,7 +2835,7 @@ set_sp0_ptr:
     sta VIC_SP1_X
     lda zp_chop_y
     sec
-    sbc #2                      // 2 pixels above fuselage (directly on sleek mast tip)
+    sbc #0                      // Overlay shares the exact body origin
     sta VIC_SP1_Y
     lda zp_chop_x_hi
     beq sp1_msb_done
@@ -2349,17 +2844,21 @@ set_sp0_ptr:
     sta VIC_MSB_X
 sp1_msb_done:
 
-    lda zp_rotor_frame
+    ldx zp_chop_facing
+    lda rotor_pointer_base,x
     clc
-    adc #SP_ROTOR_BASE
+    adc zp_rotor_frame
     sta SPRITE_PTR_BASE + 1
-    lda #COLOR_CYAN
+    lda #COLOR_LIGHT_GREY
     sta VIC_SP0_COLOR + 1
 
+setup_sp2:
     // -------------------------------------------------------------------------
     // Sprite 2: Hostage 1
     // -------------------------------------------------------------------------
     lda zp_h1_active
+    beq hide_sp2
+    lda zp_h1_state
     beq hide_sp2
     lda zp_h1_x_lo
     sta VIC_SP2_X
@@ -2374,9 +2873,9 @@ sp2_msb_done:
 
     // Frame logic
     lda zp_h1_state
-    cmp #1
-    bne sp2_check_running
-    lda #SP_HOSTAGE_WAVE
+    cmp #2                      // 2 = Running toward chopper
+    beq sp2_check_running
+    lda #SP_HOSTAGE_WAVE        // 0 (Trapped) or 1 (Waving) shows hostage waving for rescue
     jmp set_sp2_frame
 sp2_check_running:
     lda zp_h1_dir
@@ -2405,6 +2904,8 @@ setup_sp3:
     // -------------------------------------------------------------------------
     lda zp_h2_active
     beq hide_sp3
+    lda zp_h2_state
+    beq hide_sp3
     lda zp_h2_x_lo
     sta VIC_SP3_X
     lda zp_h2_y
@@ -2416,6 +2917,13 @@ setup_sp3:
     sta VIC_MSB_X
 sp3_msb_done:
 
+    // Frame logic
+    lda zp_h2_state
+    cmp #2                      // 2 = Running toward chopper
+    beq sp3_check_running
+    lda #SP_HOSTAGE_WAVE        // 0 (Trapped) or 1 (Waving) shows hostage waving for rescue
+    jmp set_sp3_frame
+sp3_check_running:
     lda zp_h2_dir
     bne sp3_run_left
     lda zp_hostage_anim
@@ -2453,7 +2961,10 @@ setup_sp4:
     sta VIC_MSB_X
 sp4_msb_done:
 
-    lda #SP_TANK_BODY
+    lda zp_hostage_anim
+    and #1
+    clc
+    adc #SP_TANK_BODY
     sta SPRITE_PTR_BASE + 4
     lda #COLOR_DARK_GREY
     sta VIC_SP0_COLOR + 4
@@ -2559,376 +3070,606 @@ hide_sp7:
     rts
 
 // ==============================================================================
-// SID 6581/8580 SOUND & MUSIC ENGINE
 // ==============================================================================
+// SID 6581/8580 SOUND & SFX ENGINE
+// ==============================================================================
+// Clock-correct SID music. Original source's D/Eb/F#/G/A/Bb motif is retained.
+// Voice 1: lead/chime; voice 2: title bass or rotor; voice 3: drums/priority SFX.
 sid_reset:
-    ldx #$18
+    ldx #24
     lda #0
-clear_sid_loop:
-    sta $D400, x
+sid_clear:
+    sta $d400,x
     dex
-    bpl clear_sid_loop
-
-    // Set Master Volume to 15 (Max) and configure Low-Pass Filter ($10 | $0F = $1F)
-    lda #$1F
+    bpl sid_clear
+    sta music_phase_lo
+    sta music_phase_hi
+    sta music_note
+    sta drum_age
+    sta drum_kind
+    sta fx_age
+    sta fx_pending
+    sta chime_timer
+    sta chime_age
+    sta zp_sfx_timer
+    sta zp_sfx_type
+    lda #63
+    sta zp_music_step
+    lda #15
     sta SID_VOLUME
-
-    // Initialize Filter Cutoff ($5000)
-    lda #$00
-    sta SID_FILTER_CUT_LO
-    lda #$50
-    sta SID_FILTER_CUT_HI
-
-    // Route Voice 2 (Rotor/Engine) and Voice 3 (Explosions/SFX) through Filter
-    // Medium-high Resonance ($80) + V2 ($02) + V3 ($04) = $86
-    lda #$86
-    sta SID_FILTER_RES
-
-    // Initialize Voice 1 (Melody & Tactical Arpeggio):
-    // Sawtooth wave, fast attack, medium sustain
-    lda #$09
+    lda #$06
     sta SID_V1_AD
-    lda #$94
+    lda #$92
     sta SID_V1_SR
-
-    // Initialize Voice 2 (Helicopter Turbine & Engine):
-    // Pulse wave with 12-bit PWM
-    lda #$18
+    lda #$05
     sta SID_V2_AD
-    lda #$A2
+    lda #$62
     sta SID_V2_SR
-    lda #$08
-    sta SID_V2_PW_HI
-    lda #$00
+    lda #0
     sta SID_V2_PW_LO
+    lda #6
+    sta SID_V2_PW_HI
+    rts
 
-    // Initialize Voice 3 (Percussion & SFX):
-    lda #$00
-    sta SID_V3_AD
-    lda #$00
-    sta SID_V3_SR
+// A=effect, X=duration. Foreground publishes atomically to IRQ-owned audio.
+// Rescue chimes have a separate timer and cannot leave a noise voice hanging.
+request_sfx:
+    php
+    sei
+    cmp #3
+    bne request_noise
+    stx chime_timer
+    lda #0
+    sta chime_age
+    plp
+    rts
+request_noise:
+    cmp #1
+    bne accept_noise
+    ldy zp_sfx_timer
+    beq accept_noise
+    ldy zp_sfx_type
+    cpy #2
+    beq reject_noise
+accept_noise:
+    sta zp_sfx_type
+    stx zp_sfx_timer
+    lda #1
+    sta fx_pending
+reject_noise:
+    plp
     rts
 
 sid_play_frame:
     lda zp_game_state
-    cmp #1                      // Playing?
-    bne play_title_audio
-    jmp play_ingame_audio
-
-play_title_audio:
-
-    // -------------------------------------------------------------------------
-    // TITLE / MENU / GAMEOVER AUDIO (Authentic Middle Eastern Hijaz Maqam)
-    // -------------------------------------------------------------------------
-    // Voice 2: Continuous 12-bit Pulse Width Modulation chorusing on desert drone
-    inc zp_pwm_phase
-    lda zp_pwm_phase
-    and #$0F
-    clc
-    adc #$06
-    sta SID_V2_PW_HI
-
-    // Apply exotic micro-vibrato on Voice 1 sustained notes
-    lda zp_frame_counter
-    and #$02
-    beq title_vib_down
-    ldx zp_music_step
-    lda mel_freq_lo, x
-    clc
-    adc #$05
-    sta SID_V1_FREQ_LO
-    jmp title_vib_done
-title_vib_down:
-    ldx zp_music_step
-    lda mel_freq_lo, x
-    sec
-    sbc #$05
-    sta SID_V1_FREQ_LO
-title_vib_done:
-
-    // Step music every 6 frames (~8.3 notes/second = swift Middle Eastern tempo)
-    inc zp_music_speed
-    lda zp_music_speed
-    cmp #6
-    bcc title_audio_done
+    cmp #2
+    bne audio_not_over
     lda #0
-    sta zp_music_speed
-
-    // Advance note index (0..31 for full 32-step melody)
-    ldx zp_music_step
-    inx
-    txa
-    and #$1F                    // 32-note loop
+    sta SID_V1_CTRL
+    sta SID_V2_CTRL
+    sta SID_V3_CTRL
+    rts
+audio_not_over:
+    // Old percussion advances before new triggers: hats last a whole tick.
+    jsr music_drums_tick
+    clc
+    lda music_phase_lo
+    adc #<MUSIC_RATE
+    sta music_phase_lo
+    lda music_phase_hi
+    adc #>MUSIC_RATE
+    sta music_phase_hi
+    bcc audio_no_step
+    inc zp_music_step
+    lda zp_music_step
+    and #63
     sta zp_music_step
     tax
-
-    // Voice 1 (Exotic Arabian Hijaz Lead Melody)
-    lda mel_freq_hi, x
-    sta SID_V1_FREQ_HI
-    lda mel_freq_lo, x
-    sta SID_V1_FREQ_LO
-    lda #$21                    // Sawtooth + Gate ON
+    and #1
+    bne music_odd_step
+    txa
+    lsr
+    tax
+    lda melody_notes,x
+    sta music_note
+    lda bass_notes,x
+    sta music_bass
+    lda #1
+    sta music_attack
+music_odd_step:
+    lda zp_sfx_timer
+    bne audio_no_step
+    lda zp_music_step
+    and #15
+    tax
+    lda percussion,x
+    beq audio_no_step
+    sta drum_kind
+    lda #0
+    sta drum_age
+    jsr music_drum_trigger
+audio_no_step:
+    // One logical tick of gate release before the next eighth-note attack.
+    lda zp_music_step
+    and #1
+    beq no_music_release
+    clc
+    lda music_phase_lo
+    adc #<MUSIC_RATE
+    lda music_phase_hi
+    adc #>MUSIC_RATE
+    bcc no_music_release
+    lda chime_timer
+    bne no_music_release
+    lda #$20
     sta SID_V1_CTRL
-
-    // Voice 2 (Deep Modal Arabian Drone & Pulse Bass)
-    lda bass_freq_hi, x
-    sta SID_V2_FREQ_HI
-    lda bass_freq_lo, x
-    sta SID_V2_FREQ_LO
-    lda #$41                    // Pulse + Gate ON
+    lda zp_game_state
+    bne no_music_release
+    lda #$40
     sta SID_V2_CTRL
+no_music_release:
+    jsr music_voice1
+    jsr music_voice2
+    jmp noise_effect_tick
 
-    // Voice 3 (Authentic Doumbek / Darbuka Rhythm)
-    lda drum_pattern, x
-    beq title_drum_rest
-    cmp #$82
-    beq title_drum_tak
-    // "DUM" = Deep Doumbek Bass Hit
-    lda #$81                    // Noise + Gate ON
-    sta SID_V3_CTRL
-    lda #$0C                    // Deep resonant bass noise pitch
-    sta SID_V3_FREQ_HI
-    jmp title_audio_done
-
-title_drum_tak:
-    // "TAK" = Sharp Darbuka Rim-Shot / Finger Cymbal
-    lda #$81                    // Noise + Gate ON
-    sta SID_V3_CTRL
-    lda #$32                    // Crisp bright metallic rim click
-    sta SID_V3_FREQ_HI
-    jmp title_audio_done
-
-title_drum_rest:
-    lda #$80                    // Gate OFF (sharp decay)
-    sta SID_V3_CTRL
-
-title_audio_done:
+music_voice1:
+    lda chime_timer
+    beq music_lead
+    dec chime_timer
+    lda chime_age
+    and #3
+    beq chime_release
+    cmp #1
+    bne chime_advance
+    lda chime_age
+    lsr
+    lsr
+    and #3
+    tax
+    lda chime_notes,x
+    tax
+    lda sid_freq_lo,x
+    sta SID_V1_FREQ_LO
+    lda sid_freq_hi,x
+    sta SID_V1_FREQ_HI
+    lda #$11
+    sta SID_V1_CTRL
+    jmp chime_advance
+chime_release:
+    lda #$10
+    sta SID_V1_CTRL
+chime_advance:
+    inc chime_age
+    lda chime_timer
+    bne voice1_done
+    lda #1
+    sta music_attack
+voice1_done:
+    rts
+music_lead:
+    lda music_attack
+    beq voice1_done
+    lda #0
+    sta music_attack
+    ldx music_note
+    beq voice1_done
+    lda sid_freq_lo,x
+    sta SID_V1_FREQ_LO
+    lda sid_freq_hi,x
+    sta SID_V1_FREQ_HI
+    lda #$21
+    sta SID_V1_CTRL
     rts
 
-// -----------------------------------------------------------------------------
-// IN-GAME AUDIO ENGINE (Voices 1, 2, and 3 simultaneously)
-// -----------------------------------------------------------------------------
-play_ingame_audio:
-    // -------------------------------------------------------------------------
-    // VOICE 2: HELICOPTER ENGINE TURBINE & ROTOR BLADES
-    // -------------------------------------------------------------------------
+music_voice2:
+    lda zp_game_state
+    beq title_bass
+    cmp #1
+    bne rotor_off
+    lda zp_chop_explode_timer
+    bne rotor_off
     lda zp_chop_landed
-    cmp #2                      // Crashed?
-    beq chopper_silence
-    cmp #1                      // Landed on base pad?
-    beq chopper_idle_hum
-
-    // In flight: Dynamic twin-turbine engine whine
-    // Frequency shifts with vertical climb velocity (climbing increases pitch!)
-    lda zp_chop_vy              // Signed velocity
-    eor #$FF
-    lsr
-    clc
-    adc #$16                    // Base turbine pitch high byte
+    beq flight_rotor
+    lda #$04
     sta SID_V2_FREQ_HI
-    lda #$20
+    lda #$32
+    sta SID_V2_SR
+    jmp rotor_pulse
+flight_rotor:
+    // Signed -2..+5 velocity maps continuously to eight pitch values.
+    lda zp_chop_vy
+    clc
+    adc #2
+    and #7
+    tax
+    lda turbine_pitch,x
+    sta SID_V2_FREQ_HI
+    lda #$62
+    sta SID_V2_SR
+rotor_pulse:
+    lda #0
     sta SID_V2_FREQ_LO
-
-    // Pulse wave ($41) with PWM sweep
-    lda #$41
-    sta SID_V2_CTRL
-
-    // 12-bit Pulse Width modulation for chorusing twin turbines
     inc zp_pwm_phase
     lda zp_pwm_phase
-    and #$0F
+    lsr
+    lsr
+    and #7
     clc
-    adc #$06
+    adc #4
     sta SID_V2_PW_HI
-
-    // Heavy Rotor Blade Chop on frame 0 of every 8 frames
-    lda zp_frame_counter
-    and #$07
-    bne update_voice1_game
-    lda #$81                    // Noise pulse
-    sta SID_V2_CTRL
-    lda #$09
-    sta SID_V2_FREQ_HI
-    jmp update_voice1_game
-
-chopper_idle_hum:
-    // Soft gentle turbine idle on tarmac
-    lda #$0A
-    sta SID_V2_FREQ_HI
-    lda #$00
-    sta SID_V2_FREQ_LO
     lda #$41
     sta SID_V2_CTRL
-    jmp update_voice1_game
-
-chopper_silence:
+    lda zp_frame_counter
+    and #7
+    bne rotor_done
+    lda #$81
+    sta SID_V2_CTRL
+    lda #$07
+    sta SID_V2_FREQ_HI
+rotor_done:
+    rts
+rotor_off:
     lda #0
     sta SID_V2_CTRL
-
-update_voice1_game:
-    // -------------------------------------------------------------------------
-    // VOICE 1: RESCUE CHIME FANFARE or TACTICAL COMBAT BASS
-    // -------------------------------------------------------------------------
-    lda zp_sfx_timer
-    beq voice1_play_combat_motif
-    lda zp_sfx_type
-    cmp #3                      // Hostage rescue chime active?
-    bne voice1_play_combat_motif
-
-    // Rescue Chime: Ascending 4-Note Arpeggio Fanfare (C-5, E-5, G-5, C-6)
-    dec zp_sfx_timer
-    lda zp_sfx_timer
-    lsr
-    and #$03
-    tax
-    lda chime_notes_hi, x
-    sta SID_V1_FREQ_HI
-    lda chime_notes_lo, x
-    sta SID_V1_FREQ_LO
-    lda #$11                    // Sweet pure Triangle wave
-    sta SID_V1_CTRL
-    jmp update_voice3_game
-
-voice1_play_combat_motif:
-    // Driving In-Game Tactical Tension Bass / Motif
-    lda zp_frame_counter
-    and #$07
-    bne update_voice3_game
-
-    inc zp_ingame_music_step
-    lda zp_ingame_music_step
-    and #$0F
-    tax
-    lda combat_bass_hi, x
-    beq voice1_gate_off
-    sta SID_V1_FREQ_HI
-    lda combat_bass_lo, x
-    sta SID_V1_FREQ_LO
-    lda #$21                    // Punchy Sawtooth wave + Gate ON
-    sta SID_V1_CTRL
-    jmp update_voice3_game
-voice1_gate_off:
-    lda #$20                    // Gate OFF (release decay)
-    sta SID_V1_CTRL
-
-update_voice3_game:
-    // -------------------------------------------------------------------------
-    // VOICE 3: SOUND EFFECTS WITH ANALOG FILTER SWEEP
-    // -------------------------------------------------------------------------
-    lda zp_sfx_timer
-    beq sfx_silence_v3
-    dec zp_sfx_timer
-
-    lda zp_sfx_type
-    cmp #1                      // Vulcan Cannon Fire
-    beq play_vulcan_sfx
-    cmp #2                      // Heavy Resonant Explosion
-    beq play_explosion_sfx
+    rts
+title_bass:
+    ldx music_bass
+    beq rotor_off
+    lda sid_freq_lo,x
+    sta SID_V2_FREQ_LO
+    lda sid_freq_hi,x
+    sta SID_V2_FREQ_HI
+    // Do not undo the lookahead release on this same tick.
+    lda zp_music_step
+    and #1
+    bne rotor_done
+    lda #$41
+    sta SID_V2_CTRL
     rts
 
-sfx_silence_v3:
+music_drum_trigger:
+    lda #$03
+    sta SID_V3_AD
+    lda #$70
+    sta SID_V3_SR
     lda #0
-    sta SID_V3_CTRL
-    rts
-
-play_vulcan_sfx:
-    // Rapid cyclic machine-gun gunfire
-    lda zp_sfx_timer
-    and #$01
-    bne vulcan_gate_off
-    lda #$81                    // Noise burst + Gate ON
-    sta SID_V3_CTRL
-    lda zp_sfx_timer
-    asl
-    adc #$18
-    sta SID_V3_FREQ_HI
-    lda #$00
     sta SID_V3_FREQ_LO
+    lda drum_kind
+    cmp #1
+    bne drum_noise
+    lda #$16
+    sta SID_V3_FREQ_HI
+    lda #$11
+    sta SID_V3_CTRL
     rts
-vulcan_gate_off:
-    lda #$80                    // Gate OFF
+drum_noise:
+    cmp #2
+    bne drum_hat
+    lda #$28
+    bne drum_noise_pitch
+drum_hat:
+    lda #$60
+drum_noise_pitch:
+    sta SID_V3_FREQ_HI
+    lda #$81
+    sta SID_V3_CTRL
+    rts
+music_drums_tick:
+    lda zp_sfx_timer
+    bne drum_tick_done
+    lda drum_kind
+    beq drum_tick_done
+    inc drum_age
+    cmp #3
+    beq drum_stop
+    lda drum_age
+    cmp #3
+    bcs drum_stop
+    ldx drum_age
+    lda drum_kind
+    cmp #1
+    bne drum_tick_done
+    lda kick_slide,x
+    sta SID_V3_FREQ_HI
+drum_tick_done:
+    rts
+drum_stop:
+    lda #0
+    sta drum_kind
     sta SID_V3_CTRL
     rts
 
-play_explosion_sfx:
-    // Deep heavy explosive blast
-    lda #$81                    // Noise + Gate ON
+noise_effect_tick:
+    lda zp_sfx_timer
+    beq noise_done
+    lda fx_pending
+    beq noise_active
+    lda #0
+    sta fx_pending
+    sta fx_age
     sta SID_V3_CTRL
+    sta SID_V3_SR
+    sta drum_kind
+    // Full logical tick of release before starting a new effect.
+    rts
+noise_active:
+    inc fx_age
+    lda #$03
+    sta SID_V3_AD
+    lda #$90
+    sta SID_V3_SR
+    lda zp_sfx_type
+    cmp #2
+    beq noise_explosion
+    lda fx_age
+    and #1
+    beq noise_gap
+    lda #$30
+    bne noise_set_pitch
+noise_explosion:
     lda zp_sfx_timer
     lsr
-    adc #$04
-    sta SID_V3_FREQ_HI
-
-    // Real-Time SID Filter Cutoff Sweep: Starts high, decays down to sub-bass
-    lda zp_sfx_timer
-    asl
-    asl
     clc
-    adc #$12
-    sta SID_FILTER_CUT_HI
+    adc #6
+noise_set_pitch:
+    sta SID_V3_FREQ_HI
+    lda #0
+    sta SID_V3_FREQ_LO
+    lda #$81
+    sta SID_V3_CTRL
+    jmp noise_countdown
+noise_gap:
+    lda #$80
+    sta SID_V3_CTRL
+noise_countdown:
+    dec zp_sfx_timer
+    bne noise_done
+    lda #0
+    sta zp_sfx_type
+    sta SID_V3_CTRL
+noise_done:
     rts
 
-// -----------------------------------------------------------------------------
-// MUSIC & SOUND DATA TABLES
-// -----------------------------------------------------------------------------
-// In-Game Tactical Combat Bass Pattern (C Minor driving rhythm)
-combat_bass_hi:
-    .byte $05, $05, $00, $06, $08, $00, $05, $05
-    .byte $06, $06, $00, $08, $0A, $08, $06, $00
+turbine_pitch: .byte $0c,$0b,$0a,$09,$08,$07,$06,$05
+kick_slide: .byte $16,$06,$02
+chime_notes: .byte 60,64,67,72
+melody_notes:
+    .byte 50,51,54,55,54,51,54,50
+    .byte 54,55,57,58,57,55,54,51
+    .byte 57,58,62,63,62,58,57,55
+    .byte 54,55,54,51,50,51,54,50
+bass_notes:
+    .byte 26,26,26,26,26,26,26,26
+    .byte 31,31,31,31,33,33,33,33
+    .byte 34,34,34,34,33,33,33,33
+    .byte 26,26,26,26,26,26,33,26
+percussion:
+    .byte 1,0,3,0,2,0,3,0,1,0,3,0,2,3,2,3
+.function pitchWord(n) {
+    .return min(65535, round(440 * pow(2, (n-57)/12.0) * 16777216 / SID_CLOCK))
+}
+sid_freq_lo: .fill 96, <pitchWord(i)
+sid_freq_hi: .fill 96, >pitchWord(i)
 
-combat_bass_lo:
-    .byte $D0, $D0, $00, $E0, $B0, $00, $D0, $D0
-    .byte $E0, $E0, $00, $B0, $50, $B0, $E0, $00
+// State owned by foreground unless labelled audio/IRQ. No KERNAL calls use ZP.
+extra_state_start:
+h1_remaining: .byte 0
+h2_remaining: .byte 0
+score_lo: .byte 0
+score_hi: .byte 0
+score_work_lo: .byte 0
+score_work_hi: .byte 0
+restart_armed: .byte 0
+input_grace: .byte 0
+video_phase: .byte 0
+music_phase_lo: .byte 0
+music_phase_hi: .byte 0
+music_note: .byte 0
+music_bass: .byte 0
+music_attack: .byte 0
+drum_age: .byte 0
+drum_kind: .byte 0
+fx_age: .byte 0
+fx_pending: .byte 0
+chime_timer: .byte 0
+chime_age: .byte 0
+collision_a_lo: .byte 0
+collision_a_hi: .byte 0
+collision_b_lo: .byte 0
+collision_b_hi: .byte 0
+collision_radius: .byte 0
+collision_width: .byte 0
+collision_delta: .byte 0
+extra_state_end:
 
-// Ascending Rescue Fanfare Chords (C-5, E-5, G-5, C-6)
-chime_notes_hi:
-    .byte $22, $2B, $34, $44
-chime_notes_lo:
-    .byte $58, $80, $20, $B0
+// One foreground update per simulation tick. State transitions end the tick.
+game_tick:
+    lda zp_game_state
+    cmp #1
+    beq game_tick_playing
+    rts
+game_tick_playing:
+    lda zp_chop_explode_timer
+    beq game_tick_controls
+    jsr update_chopper_physics
+    lda zp_game_state
+    cmp #1
+    bne game_tick_done
+    jmp game_tick_render
+game_tick_controls:
+    lda input_grace
+    beq game_tick_input
+    dec input_grace
+    jmp game_tick_physics
+game_tick_input:
+    jsr update_player_input
+game_tick_physics:
+    jsr update_chopper_physics
+    lda zp_game_state
+    cmp #1
+    bne game_tick_done
+    lda zp_chop_explode_timer
+    bne game_tick_render
+    jsr update_weapons
+    jsr update_barracks
+    jsr update_hostages
+    jsr update_tank
+    jsr update_jet
+    jsr check_collisions
+game_tick_render:
+    jsr update_hud
+    jsr update_hardware_sprites
+game_tick_done:
+    rts
 
-// -----------------------------------------------------------------------------
-// Middle Eastern Hijaz Maqam Lead Melody (D-4, Eb-4, F#-4, G-4, A-4, Bb-4, D-5, Eb-5)
-// -----------------------------------------------------------------------------
-mel_freq_hi:
-    // Phrase 1: Mysterious desert opening
-    .byte $11, $11, $12, $12, $12, $11, $12, $11
-    // Phrase 2: Rising through augmented second into high register
-    .byte $12, $12, $12, $12, $12, $12, $12, $11
-    // Phrase 3: Dramatic peak tension (High D-5 and Eb-5 cries)
-    .byte $12, $12, $23, $23, $23, $12, $12, $12
-    // Phrase 4: Exotic winding ornaments and resolving cadence
-    .byte $12, $12, $12, $11, $11, $11, $12, $11
+// C=1 means within a symmetric X radius. Full signed 16-bit subtraction
+// handles entities on opposite sides of X=255/256 without wraparound hits.
+collision_x:
+    sta collision_radius
+    asl
+    sta collision_width
+    sec
+    lda collision_a_lo
+    sbc collision_b_lo
+    sta collision_delta
+    lda collision_a_hi
+    sbc collision_b_hi
+    tax
+    clc
+    lda collision_delta
+    adc collision_radius
+    sta collision_delta
+    txa
+    adc #0
+    bne collision_miss
+    lda collision_delta
+    cmp collision_width
+    bcs collision_miss
+    sec
+    rts
+collision_miss:
+    clc
+    rts
 
-mel_freq_lo:
-    // Phrase 1: D-4, Eb-4, F#-4, G-4, F#-4, Eb-4, F#-4, D-4
-    .byte $A2, $BB, $0E, $2D, $0E, $BB, $0E, $A2
-    // Phrase 2: F#-4, G-4, A-4, Bb-4, A-4, G-4, F#-4, Eb-4
-    .byte $0E, $2D, $6E, $93, $6E, $2D, $0E, $BB
-    // Phrase 3: A-4, Bb-4, D-5, Eb-5, D-5, Bb-4, A-4, G-4
-    .byte $6E, $93, $44, $76, $44, $93, $6E, $2D
-    // Phrase 4: F#-4, G-4, F#-4, Eb-4, D-4, Eb-4, F#-4, D-4
-    .byte $0E, $2D, $0E, $BB, $A2, $BB, $0E, $A2
+// Add A/X (low/high) points, saturating at 65535.
+add_score:
+    clc
+    adc score_lo
+    sta score_lo
+    txa
+    adc score_hi
+    sta score_hi
+    bcc add_score_done
+    lda #$ff
+    sta score_lo
+    sta score_hi
+add_score_done:
+    rts
+draw_score:
+    lda score_lo
+    sta score_work_lo
+    lda score_hi
+    sta score_work_hi
+    ldx #0
+score_digit:
+    ldy #$30
+score_subtract:
+    sec
+    lda score_work_lo
+    sbc decimal_lo,x
+    sta zp_ptr_lo
+    lda score_work_hi
+    sbc decimal_hi,x
+    bcc score_emit
+    sta score_work_hi
+    lda zp_ptr_lo
+    sta score_work_lo
+    iny
+    jmp score_subtract
+score_emit:
+    tya
+    sta SCREEN_RAM+6,x
+    inx
+    cpx #5
+    bne score_digit
+    rts
+decimal_lo: .byte <10000,<1000,<100,<10,<1
+decimal_hi: .byte >10000,>1000,>100,>10,>1
 
-// Deep Modal Arabian Drone & Pulse Bass (D-2, G-2, Bb-2, A-2)
-bass_freq_hi:
-    .byte $04, $04, $04, $04, $04, $04, $04, $04
-    .byte $07, $07, $07, $07, $04, $04, $04, $04
-    .byte $04, $04, $04, $04, $04, $04, $04, $04
-    .byte $04, $04, $04, $04, $04, $04, $04, $04
+// Draw current X positions over the 11-character radar field.
+draw_radar:
+    ldx #10
+    lda #$2e
+radar_clear:
+    sta SCREEN_RAM+40+26,x
+    dex
+    bpl radar_clear
+    lda #2 // Screen code B (base)
+    sta SCREEN_RAM+40+26
+    lda zp_tank_active
+    beq radar_jet
+    lda zp_tank_x_lo
+    ldy zp_tank_x_hi
+    jsr radar_column
+    lda #20 // T
+    sta SCREEN_RAM+40+26,x
+radar_jet:
+    lda zp_jet_active
+    beq radar_player
+    lda zp_jet_x_lo
+    ldy zp_jet_x_hi
+    jsr radar_column
+    lda #10 // J
+    sta SCREEN_RAM+40+26,x
+radar_player:
+    lda zp_chop_x_lo
+    ldy zp_chop_x_hi
+    jsr radar_column
+    lda #16 // P
+    sta SCREEN_RAM+40+26,x
+    rts
+radar_column:
+    lsr
+    lsr
+    lsr
+    lsr
+    lsr
+    cpy #0
+    beq radar_low
+    clc
+    adc #8
+radar_low:
+    cmp #11
+    bcc radar_valid
+    lda #10
+radar_valid:
+    tax
+    rts
 
-bass_freq_lo:
-    .byte $68, $68, $68, $68, $68, $68, $68, $68
-    .byte $75, $75, $75, $75, $9C, $9C, $9C, $9C
-    .byte $AF, $AF, $AF, $AF, $9C, $9C, $9C, $9C
-    .byte $68, $68, $68, $68, $68, $68, $68, $68
+show_victory_banner:
+    jsr update_hud
+    lda #0
+    sta restart_armed
+    sta VIC_SP_ENABLE
+    ldx #0
+victory_text_loop:
+    lda victory_text,x
+    beq victory_done
+    sta SCREEN_RAM+40*11+7,x
+    lda #COLOR_LIGHT_GREEN
+    sta COLOR_RAM+40*11+7,x
+    inx
+    bne victory_text_loop
+victory_done:
+    rts
+victory_text:
+    .text "ALL 16 RESCUED - MISSION WON"
+    .byte 0
 
-// Authentic Doumbek / Darbuka Rhythm (Maqsum: DUM..TAK..TAK.DUM.TAK..)
-// $81 = Deep Doumbek DUM, $82 = Crisp Darbuka TAK, $00 = Rest
-drum_pattern:
-    .byte $81, $00, $82, $00, $82, $81, $82, $00
-    .byte $81, $00, $82, $00, $82, $81, $82, $00
-    .byte $81, $00, $82, $00, $82, $81, $82, $00
-    .byte $81, $00, $82, $00, $82, $81, $82, $00
+// An NMI must not enter KERNAL routines that assume intact BASIC zero page.
+nmi_return:
+    rti
+
 
 // ==============================================================================
 // UTILITY ROUTINES & TABLES
@@ -2950,89 +3691,44 @@ clr_loop:
     bne clr_loop
     rts
 
-screen_row_offsets_lo:
-    .fill 25, <(SCREEN_RAM + i * 40)
-
-screen_row_offsets_hi:
-    .fill 25, >(SCREEN_RAM + i * 40)
-
 // ==============================================================================
 // HIGH-DEFINITION SPRITE DATA (32 Sprites, 64 Bytes Each)
 // ==============================================================================
+main_code_end:
+.assert "code fits below sprites", main_code_end <= $3000, true
 * = $3000 "Sprite Graphics"
 
 // Sprite 0: Airwolf Stealth Supersonic Gunship Facing Right (Sleek Profile)
 sp_data_chopper_r:
-    .byte %01000000, %00100000, %00000000  // Tail rotor blade tip & rotor mast nub
-    .byte %01100000, %00110000, %00000000  // Tail rotor hub & mast base
-    .byte %00110000, %01111100, %00000000  // Swept fin top & low turbine engine cowling
-    .byte %00011000, %11111111, %10000000  // Swept fin, roofline, canopy top slope
-    .byte %00001100, %11110000, %11100000  // Tailboom, tinted cockpit windshield cutout, nose slope
-    .byte %00001111, %11111111, %11111100  // Tailboom, sleek cabin, needle nose cone
-    .byte %00000111, %11111111, %11111110  // Tailboom, side weapon sponson (ADF pod), needle tip!
-    .byte %00000011, %11111111, %11111100  // Ventral fin, 30mm chain gun barrel, lower nose
-    .byte %00000001, %01111111, %11110000  // Ventral fin tip, streamlined belly curve, FLIR pod
-    .byte %00000000, %00111111, %11000000  // Lower keel contour
-    .byte %00000000, %00001111, %00000000  // Retracted landing gear bay door
-    .fill 10 * 3, 0
-    .byte 0
+    .byte $00,$00,$00,$00,$00,$00,$00,$08,$00,$20,$08,$00,$30,$1e,$00,$38,$7f,$80,$1c,$fc,$e0,$0f,$fc,$78,$07,$ff,$9c,$07,$ff,$fe,$03,$ff,$fe,$00,$00,$04,$00,$00,$00,$00,$00,$00,$01,$e0,$78,$00,$c0,$30,$00,$e0,$38,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
 
 // Sprite 1: Airwolf Stealth Supersonic Gunship Facing Left (Sleek Profile)
 sp_data_chopper_l:
-    .byte %00000000, %00000100, %00000010  // Rotor mast nub & tail rotor blade tip
-    .byte %00000000, %00001100, %00000110  // Mast base & tail rotor hub
-    .byte %00000000, %00111110, %00001100  // Low turbine cowling & swept fin top
-    .byte %00000001, %11111111, %00011000  // Canopy top slope, roofline, swept fin
-    .byte %00000111, %00001111, %00110000  // Nose slope, tinted windshield cutout, tailboom
-    .byte %00111111, %11111111, %11110000  // Needle nose cone, sleek cabin, tailboom
-    .byte %01111111, %11111111, %11100000  // Needle tip, side weapon sponson (ADF pod), tailboom
-    .byte %00111111, %11111111, %11000000  // Lower nose, 30mm chain gun barrel, ventral fin
-    .byte %00001111, %11111110, %10000000  // FLIR pod, streamlined belly curve, ventral fin tip
-    .byte %00000011, %11111100, %00000000  // Lower keel contour
-    .byte %00000000, %11110000, %00000000  // Retracted landing gear bay door
-    .fill 10 * 3, 0
-    .byte 0
+    .byte $00,$00,$00,$00,$00,$00,$00,$10,$00,$00,$10,$04,$00,$78,$0c,$01,$fe,$1c,$07,$3f,$38,$1e,$3f,$f0,$39,$ff,$e0,$7f,$ff,$e0,$7f,$ff,$c0,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$1e,$07,$80,$0c,$03,$00,$1c,$07,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
 
 // Sprite 2: Airwolf Stealth Supersonic Gunship Facing Center / Hover (Head-On Predatory Stance)
 sp_data_chopper_c:
-    .byte %00000000, %00011000, %00000000  // Mast tip
-    .byte %00000000, %00111100, %00000000  // Rotor mast hub
-    .byte %00000110, %01100110, %01100000  // Twin turbine jet intakes flanking mast
-    .byte %00001111, %11111111, %11110000  // Low roof cowl & windshield header
-    .byte %00011100, %01111110, %00111000  // Dual tinted cockpit windshield panes
-    .byte %00111000, %00111100, %00011100  // Windshield bottom frame & nose deck
-    .byte %01111111, %11111111, %11111110  // Wide weapon sponson shoulders & nose cone
-    .byte %11101111, %11111111, %11110111  // Twin 30mm chain gun barrels & nose radome
-    .byte %01111111, %11000011, %11111110  // Ventral ADF pod bay doors & FLIR sensor
-    .byte %00011111, %11111111, %11111000  // Lower keel contour
-    .byte %00000110, %00000000, %01100000  // Retracted landing gear pads
-    .fill 10 * 3, 0
-    .byte 0
+    .byte $00,$00,$00,$00,$00,$00,$00,$18,$00,$00,$18,$00,$00,$7e,$00,$01,$ff,$80,$07,$99,$e0,$0f,$18,$f0,$1f,$ff,$f8,$1f,$7e,$f8,$3f,$7e,$fc,$3c,$00,$04,$00,$00,$00,$00,$00,$00,$07,$3c,$e0,$06,$00,$60,$07,$00,$e0,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
 
 // Sprites 3..6: Rotor Blade Animation (4 Rotational Frames)
 sp_data_rotor_0:
-    .byte %11111111, %11111111, %11111111
-    .byte %01111111, %11111111, %11111110
-    .fill 19 * 3, 0
-    .byte 0
+    .byte $ff,$ff,$ff,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$01,$ff,$f8,$00,$7f,$f8,$00,$ff,$f8,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
 
 sp_data_rotor_1:
-    .byte %00000011, %11111111, %11100000
-    .byte %00001111, %11111111, %11110000
-    .fill 19 * 3, 0
-    .byte 0
+    .byte $0f,$ff,$f0,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$01,$ff,$f8,$00,$7f,$f8,$00,$ff,$f8,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
 
 sp_data_rotor_2:
-    .byte %00000000, %11111111, %00000000
-    .byte %00000001, %11111111, %10000000
-    .fill 19 * 3, 0
-    .byte 0
+    .byte $00,$7e,$00,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$01,$ff,$f8,$00,$7f,$f8,$00,$ff,$f8,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
 
 sp_data_rotor_3:
-    .byte %00000111, %11111111, %11000000
-    .byte %00001111, %11111111, %11110000
-    .fill 19 * 3, 0
-    .byte 0
+    .byte $1f,$ff,$f8,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$01,$ff,$f8,$00,$7f,$f8,$00,$ff,$f8,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
 
 // Sprites 7..10: Hostage Running Right (4 Frames)
 sp_data_hostage_r0:
@@ -3284,31 +3980,113 @@ sp_data_shell:
     .fill 17 * 3, 0
     .byte 0
 
-// Sprites 28..31: Multi-Stage Explosions
+// Sprites 28..31: Multi-Stage Explosions (Cinematic 48x42 with VIC expansion)
 sp_data_explode_0:
+    .byte %00000000, %00000000, %00000000
+    .byte %00000000, %00000000, %00000000
+    .byte %00000000, %00000000, %00000000
     .byte %00000000, %00011000, %00000000
     .byte %00000000, %00111100, %00000000
+    .byte %00000000, %01111110, %00000000
+    .byte %00000001, %11111111, %10000000
+    .byte %00000011, %11111111, %11000000
+    .byte %00000111, %11111111, %11100000
+    .byte %00000111, %11111111, %11100000
+    .byte %00000011, %11111111, %11000000
+    .byte %00000001, %11111111, %10000000
+    .byte %00000000, %01111110, %00000000
+    .byte %00000000, %00111100, %00000000
     .byte %00000000, %00011000, %00000000
-    .fill 18 * 3, 0
+    .fill 6 * 3, 0
     .byte 0
 
 sp_data_explode_1:
-    .byte %00000000, %01111110, %00000000
-    .byte %00000011, %11111111, %11000000
-    .byte %00000000, %01111110, %00000000
-    .fill 18 * 3, 0
+    .byte %00000000, %00111100, %00000000
+    .byte %00000011, %01111110, %11000000
+    .byte %00000111, %11111111, %11100000
+    .byte %00001111, %11111111, %11110000
+    .byte %00011111, %11111111, %11111000
+    .byte %00111111, %11111111, %11111100
+    .byte %01111111, %11111111, %11111110
+    .byte %01111111, %11111111, %11111110
+    .byte %11111111, %11111111, %11111111
+    .byte %11111111, %11111111, %11111111
+    .byte %11111111, %11111111, %11111111
+    .byte %01111111, %11111111, %11111110
+    .byte %01111111, %11111111, %11111110
+    .byte %00111111, %11111111, %11111100
+    .byte %00011111, %11111111, %11111000
+    .byte %00001111, %11111111, %11110000
+    .byte %00000111, %11111111, %11100000
+    .byte %00000011, %01111110, %11000000
+    .byte %00000000, %00111100, %00000000
+    .fill 2 * 3, 0
     .byte 0
 
 sp_data_explode_2:
-    .byte %00000110, %01111110, %01100000
-    .byte %00111111, %11111111, %11111100
-    .byte %00000110, %01111110, %01100000
-    .fill 18 * 3, 0
+    .byte %01000001, %10000001, %10000010
+    .byte %00100011, %11100111, %11000100
+    .byte %00010111, %11111111, %11101000
+    .byte %10111111, %11011011, %11111101
+    .byte %01111111, %00111100, %11111110
+    .byte %00111110, %11111111, %01111100
+    .byte %11111100, %11111111, %00111111
+    .byte %01111001, %11111111, %10011110
+    .byte %00110011, %11111111, %11001100
+    .byte %11111111, %11000011, %11111111
+    .byte %00110011, %11111111, %11001100
+    .byte %01111001, %11111111, %10011110
+    .byte %11111100, %11111111, %00111111
+    .byte %00111110, %11111111, %01111100
+    .byte %01111111, %00111100, %11111110
+    .byte %10111111, %11011011, %11111101
+    .byte %00010111, %11111111, %11101000
+    .byte %00100011, %11100111, %11000100
+    .byte %01000001, %10000001, %10000010
+    .fill 2 * 3, 0
     .byte 0
 
 sp_data_explode_3:
-    .byte %00000010, %00000000, %01000000
-    .byte %01000001, %00111100, %10000010
-    .byte %00000010, %00000000, %01000000
-    .fill 18 * 3, 0
+    .byte %10000010, %00000000, %01000001
+    .byte %00010000, %01100110, %00001000
+    .byte %01000000, %11000011, %00000010
+    .byte %00001001, %00000000, %10010000
+    .byte %00100000, %00111100, %00000100
+    .byte %10000100, %01100110, %00100001
+    .byte %00010000, %10000001, %00001000
+    .byte %01000010, %00000000, %01000010
+    .byte %00000000, %01000010, %00000000
+    .byte %10010000, %00000000, %00001001
+    .byte %00000000, %01000010, %00000000
+    .byte %01000010, %00000000, %01000010
+    .byte %00010000, %10000001, %00001000
+    .byte %10000100, %01100110, %00100001
+    .byte %00100000, %00111100, %00000100
+    .byte %00001001, %00000000, %10010000
+    .byte %01000000, %11000011, %00000010
+    .byte %00010000, %01100110, %00001000
+    .byte %10000010, %00000000, %01000001
+    .fill 2 * 3, 0
     .byte 0
+
+.assert "original sprite bank length", *, $3800
+airwolf_left_0:
+    .byte $ff,$ff,$ff,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$80,$1f,$fe,$00,$1f,$ff,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+airwolf_left_1:
+    .byte $0f,$ff,$f0,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$80,$1f,$fe,$00,$1f,$ff,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+airwolf_left_2:
+    .byte $00,$7e,$00,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$80,$1f,$fe,$00,$1f,$ff,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+airwolf_left_3:
+    .byte $1f,$ff,$f8,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$80,$1f,$fe,$00,$1f,$ff,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+airwolf_front_0:
+    .byte $ff,$ff,$ff,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$f8,$1f,$ff,$f8,$0f,$ff,$f0,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+airwolf_front_1:
+    .byte $0f,$ff,$f0,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$f8,$1f,$ff,$f8,$0f,$ff,$f0,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+airwolf_front_2:
+    .byte $00,$7e,$00,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$f8,$1f,$ff,$f8,$0f,$ff,$f0,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+airwolf_front_3:
+    .byte $1f,$ff,$f8,$00,$3c,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$03,$ff,$f8,$1f,$ff,$f8,$0f,$ff,$f0,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00,$00
+
+.assert "expanded sprite bank length", *, $3a00
+rotor_pointer_base:
+    .byte SP_ROTOR_BASE,$e4,$e0

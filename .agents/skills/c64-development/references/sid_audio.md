@@ -36,6 +36,10 @@ Each voice occupies 7 contiguous registers:
 | `$D41B` | `OSC3_RANDOM`| Voice 3 oscillator output (Read-only, 8-bit random noise or waveform sample) |
 | `$D41C` | `ENV3` | Voice 3 envelope output (Read-only, 8-bit current amplitude 0-255) |
 
+> [!CAUTION]
+> **REGISTERS $D400 - $D418 ARE STRICTLY WRITE-ONLY!**
+> Reading any voice register (`$D400 - $D414`) or filter register (`$D415 - $D418`) returns unconnected open-bus / floating line capacitance garbage. You **CANNOT** perform read-modify-write instructions (e.g., `dec $d40f`, `asl $d404`, or `lda $d401; sbc #$06; sta $d401`) on SID sound registers! All pitch sweeps, drum pitch drops, and volume envelopes must maintain their state in zero-page/RAM or step through ROM lookup tables. Only `$D419 - $D41C` are readable.
+
 ---
 
 ## 2. Voice Control Register (`$D404 / $D40B / $D412`)
@@ -50,6 +54,10 @@ Each voice occupies 7 contiguous registers:
 | **5** | `$20` | **SAWTOOTH** | Sawtooth waveform. Rich in even and odd harmonics. Great for brass, punchy bass, aggressive synth leads, strings. |
 | **6** | `$40` | **PULSE** | Variable Pulse / Square waveform. Controlled by PW registers. Classic 8-bit sounds, hollow oboes, strings with PWM. |
 | **7** | `$80` | **NOISE** | Pseudo-random noise. Percussion (snare, hi-hat), explosions, wind, water, gunfire. |
+
+> [!IMPORTANT]
+> **GATE BIT REQUIRES 0 -> 1 TRANSITION TO RETRIGGER ATTACK!**
+> On the MOS 6581 and 8580 SID, writing Gate ON (`$01`) when Gate was already `1` does **NOT** reset the envelope! The internal ADSR generator stays in the Sustain or Decay phase. If consecutive notes of the same pitch are played without clearing Gate, the voice emits one continuous, unarticulated drone. To articulate repeated notes or ensure fresh Attack transients, Gate **must be cleared to 0** for at least 1 frame (~20 ms) before the new note triggers.
 
 > **Note on Combined Waveforms**: Setting multiple waveform bits simultaneously (e.g. `$31` for Triangle + Sawtooth) creates unique hybrid timbres on physical SID chips. The 6581 produces gritty analog saturation; the 8580 produces cleaner combined outputs.
 
@@ -66,7 +74,19 @@ $$\text{FreqReg} = \frac{\text{Freq}_{\text{Hz}} \times 16777216}{\text{Clock}_{
 ### Complete Chromatic Note Table (PAL - KickAssembler Data Table)
 
 ```kickassembler
-// 16-bit SID frequency values for chromatic scale (C-0 to B-7)
+// Recommended Pattern: Mathematical compile-time pitch calculation (PAL/NTSC switchable)
+// Index 0 = C-0, 57 = A-4 (440 Hz)
+.const NTSC = false
+.const SID_CLOCK = NTSC ? 1022727 : 985248
+
+.function sidPitch(n) {
+    .return min(65535, round(440 * pow(2, (n-57)/12.0) * 16777216 / SID_CLOCK))
+}
+
+sid_freq_lo: .fill 96, <sidPitch(i)
+sid_freq_hi: .fill 96, >sidPitch(i)
+
+// Or Pre-computed Static Table:
 sid_freq_lo:
     // Octave 0
     .byte $17,$18,$1a,$1b,$1d,$1f,$20,$22,$25,$27,$29,$2c
@@ -266,3 +286,91 @@ A standard C64 music engine is called on every PAL VBlank (50 Hz / Raster line 0
    * **Arpeggio table**: Semitone pitch offsets relative to root note (e.g. 0, 4, 7 for major chord cycling at 50Hz).
    * **Pitch vibrato table**: Up/down pitch delta.
    * **Filter sweep table**: Dynamic cutoff updates.
+
+---
+
+## 9. Production Tracker Engine Architecture & Hardware Rules
+
+### 9.1 Fractional-Frame BPM Timing (16-Bit Phase Accumulator)
+Integer frame counting (`tick_timer == 5`) limits tempos to integer divisors of the frame rate (e.g., 50/5 = 150 BPM, 50/6 = 125 BPM) and drifts. Production engines use a 16-bit phase accumulator for arbitrary BPMs:
+```kickassembler
+.const NTSC = false
+.const FRAME_RATE = NTSC ? 59.826 : 50.125
+.const BPM = 132
+// Four sixteenth-note steps per quarter note:
+.const STEP_RATE = round(BPM * 4 * 65536 / (60 * FRAME_RATE))
+
+irq_handler:
+    // Accumulate step phase
+    clc
+    lda tempo_lo
+    adc #<STEP_RATE
+    sta tempo_lo
+    lda tempo_hi
+    adc #>STEP_RATE
+    sta tempo_hi
+    bcc no_music_step
+    jsr step_sequencer          // Advance sequence when accumulator overflows
+    jmp modulation
+
+no_music_step:
+    // Predictive lookahead: test if next frame will overflow
+    clc
+    lda tempo_lo
+    adc #<STEP_RATE
+    lda tempo_hi
+    adc #>STEP_RATE
+    bcc modulation
+    jsr check_gate_cut          // Release 1 frame (~20 ms) before next note!
+```
+
+### 9.2 Predictive Lookahead Gate Cut
+Because SID ADSR requires a `0 -> 1` Gate transition to re-attack, consecutive notes of the same or different pitch will slur if Gate remains 1. Testing whether the *next* frame will trigger an event allows lowering the Gate (`#$20`) for exactly 1 frame (20 ms):
+```kickassembler
+check_gate_cut:
+    // Look ahead to next step in sequence
+    lda next_step_note
+    beq gate_cut_done           // If next note is sustain (0), keep gate high!
+    lda #$20                    // Gate OFF (Waveform without Gate bit)
+    sta SID_V1_CTRL
+gate_cut_done:
+    rts
+```
+
+### 9.3 Voice Multiplexing (Shared Drum & Bass Order of Operations)
+When Voice 3 shares bass and percussion (kick/snare/hi-hat):
+1. **Advance old drum timer before triggering new hits**: Execute `update_drums` *before* the sequencer step so 1-frame hits (e.g. hi-hats) survive until the next IRQ rather than vanishing instantly.
+2. **Refresh harmonic root before downbeat kick**: Read the new bar's chord root at `step & 15 == 0` *before* triggering the kick. When the kick finishes, bass restores to the *new* bar's tonic instead of the previous bar's harmony.
+3. **Write-only sweep table**: Never read `$D40F` to pitch-slide drums (`lda $d40f; sbc #$06; sta $d40f` is invalid). Use a ROM/RAM table (`kick_pitch_hi,x`).
+
+### 9.4 16-Bit Safe Vibrato
+Vibrato modulation added to frequency low byte must propagate carry/borrow to frequency high byte. Otherwise, when low byte underflows (e.g. `$00` + `$FF`), pitch jumps 256 units upward instead of dropping 1 unit:
+```kickassembler
+    lda v1_base_freq_lo
+    clc
+    adc vib_table_lo,x
+    sta SID_V1_FREQ_LO
+    lda v1_base_freq_hi
+    adc vib_table_hi,x          // $00 for positive, $FF for negative delta
+    sta SID_V1_FREQ_HI
+```
+
+### 9.5 CIA1 Keyboard Polling
+When polling the Space bar or keys in demo main loops (`$DC01`), ensure CIA1 Data Direction Registers are initialized:
+```kickassembler
+    lda #$ff
+    sta $dc02                   // CIA1 Port A: Outputs (column select)
+    lda #$00
+    sta $dc03                   // CIA1 Port B: Inputs (row read)
+    lda #$7f
+    sta $dc00                   // Select column 7 (Space bar row)
+```
+
+### 9.6 Compile-Time Table Length Assertions
+Prevent silent sequence desynchronization between voice tracks using KickAssembler assertions:
+```kickassembler
+seq_end:
+.assert "lead length",   v2_seq - v1_seq, TOTAL_STEPS
+.assert "chord length",  v3_seq - v2_seq, TOTAL_STEPS
+.assert "rhythm length", seq_end - v3_seq, TOTAL_STEPS
+```
