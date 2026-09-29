@@ -26,6 +26,8 @@ Write 6502/6510 Assembly, Python, C, or Commodore BASIC in Antigravity with AI a
   * Generates cycle-exact KickAssembler binary assembly (`.byte %xxxxxxxx`) and VIC-II color register setup routines.
   * Preloaded with the authentic multicolor Commodore (C=) "Chicken Lips" logo.
 * **Tape Image Mastering (`.tap`)**: Full C64 cassette tape mastering engine (`c64u-bridge tap`). Packages PRGs, compiles assembly, or transpiles Python into bit-accurate `.tap` images with standard KERNAL headers, sync marks, and pilot tones.
+* **Direct SID Playback**: Upload PSID/RSID files to the C64U firmware's built-in SID player from the TUI (`Ctrl+P`), CLI, or MCP tool, with optional subtune selection.
+* **SID Round-Trip Compiler**: Reverse-decompile SID files to editable ASM/Python and rebuild them into validated PSID/RSID containers while preserving metadata and embedded load-address layout.
 * **Multi-Assembler Toolchain**: Auto-detects and invokes **KickAssembler** (v5.x), **ACME**, and **CC65 / cl65**.
 * **Python-to-6502 Transpiler & Textual TUI**: Develop in Python using C64 hardware intrinsics (`poke`, `peek`, `wait_raster`, `border_color`, `sid_tone`), view live AST and generated assembly, and deploy with one keystroke (`F5`).
 * **Model Context Protocol (MCP)**: Native JSON-RPC 2.0 MCP server exposes compiler, screen inspection, and hardware control tools to Antigravity agents.
@@ -157,7 +159,7 @@ c64u-bridge tap examples/rainbow_border.py
 
 ## 🕹️ Interactive Textual TUI IDE
 
-Launch the two-row terminal IDE:
+Launch the three-row terminal IDE:
 ```bash
 c64u-bridge tui
 ```
@@ -181,6 +183,10 @@ c64u-bridge tui
   * `Shift+F6`: Screen Dump ($0400 Screen RAM & $D800 Color RAM)
   * `Shift+F7`: Cold Reboot C64U
   * `Shift+F8`: Quit TUI
+* **SID tools**:
+  * `Ctrl+D`: Decompile SID to ASM + Python
+  * `Ctrl+B`: Compile the loaded SID assembly back to `.sid`
+  * `Ctrl+P`: Play the selected/compiled SID on C64U
 
 ---
 
@@ -198,6 +204,18 @@ c64u-bridge run game_dev/choplifter.asm
 
 # Directly run a Python file (auto-transpiles, compiles, and DMA executes)
 c64u-bridge run examples/rainbow_border.py
+
+# Upload a SID tune and start the C64U built-in player
+c64u-bridge sidplay examples/Commodore.sid
+
+# Play a specific one-based subtune
+c64u-bridge sidplay music.sid --song 2
+
+# Rebuild a decompiled source into a SID container
+c64u-bridge sidcompile examples/Commodore_decompiled.asm
+
+# Supply an explicit metadata template and output path
+c64u-bridge sidcompile edited.asm --template original.sid -o edited.sid
 
 # Export PRG, ASM, or Python to .tap tape image
 c64u-bridge tap game_dev/choplifter.asm --name "CHOPLIFTER"
@@ -247,6 +265,8 @@ Add the MCP server definition to your Antigravity configuration (or configure wi
 | :--- | :--- | :--- |
 | `c64_build_and_run` | `source_path`, `assembler` | Compiles assembly/C/Python and executes immediately on C64U via DMA. |
 | `c64_run_binary` | `prg_path` | DMA uploads and executes an existing `.prg` binary. |
+| `c64_play_sid` | `sid_path`, optional `song` | Uploads PSID/RSID music and starts the C64U built-in SID player. |
+| `c64_compile_sid` | `source_path`, optional `output_path`, `template_path`, `assembler` | Reassembles decompiled ASM/Python into a validated SID container. |
 | `c64_inspect_screen` | `use_ansi_colors` | Dumps `$0400–$07E7` and decodes PETSCII into a 40x25 grid. |
 | `c64_read_memory` | `address`, `length` | Reads memory range (hex address) and returns hex dump + ASCII. |
 | `c64_write_memory` | `address`, `data` | Writes hex byte sequence directly to RAM or I/O registers via DMA. |

@@ -1,5 +1,5 @@
 """
-Textual TUI for Commodore 64 Python-to-Assembly Transpiler & Bridge.
+Textual TUI for Commodore 64 Python-to-Assembly Transpiler, SID decompiler & Bridge.
 Provides an interactive retro-styled IDE for writing 6502-targeted Python code,
 transpiling to assembly, compiling to .prg, and DMA-deploying directly to the C64U.
 """
@@ -38,6 +38,8 @@ from textual.widgets.option_list import Option
 from .client import C64UClient, C64UClientError
 from .compiler import CrossCompiler
 from .screen import format_screen
+from .sid_compiler import SidCompileError, compile_sid_source
+from .sid_decompiler import SidDecompileError, decompile_sid_file
 from .transpiler import PRESETS, PythonTo6502Transpiler, TranspileOptions, TranspileResult
 
 
@@ -60,7 +62,7 @@ Footer {
 }
 
 #toolbar {
-    height: 4;
+    height: 6;
     background: #161b36;
     padding: 0 1;
     border-bottom: solid #352879;
@@ -78,6 +80,11 @@ Footer {
 }
 
 #toolbar-row-2 {
+    margin-top: 0;
+    margin-bottom: 1;
+}
+
+#toolbar-row-3 {
     margin-top: 0;
 }
 
@@ -221,6 +228,33 @@ Footer {
 }
 #btn-quit:hover {
     background: #6b7280;
+}
+
+#btn-decompile-sid {
+    background: #9333ea;
+    color: #ffffff;
+    text-style: bold;
+}
+#btn-decompile-sid:hover {
+    background: #a855f7;
+}
+
+#btn-play-sid {
+    background: #0f766e;
+    color: #ffffff;
+    text-style: bold;
+}
+#btn-play-sid:hover {
+    background: #0d9488;
+}
+
+#btn-compile-sid {
+    background: #0369a1;
+    color: #ffffff;
+    text-style: bold;
+}
+#btn-compile-sid:hover {
+    background: #0284c7;
 }
 
 #bridge-status {
@@ -434,6 +468,17 @@ class HelpModal(ModalScreen[None]):
                     "• [yellow]sid_tone(freq, wave, ad, sr)[/]: Configure SID Voice 1\n"
                     "• [yellow]delay(cycles)[/]: Delay loop using X/Y registers\n"
                     "• [yellow]asm(\"...\")[/]: Verbatim inline 6502 assembly\n\n"
+                    "[bold cyan]SID Reverse Decompiler:[/]\n"
+                    "• Open a [yellow].sid[/] file or press [bold white]Ctrl+D[/] to import PSID/RSID music.\n"
+                    "• Reachable init/play code becomes annotated 6502 assembly.\n"
+                    "• Tables and uncertain bytes remain exact .byte data.\n"
+                    "• Sidecars are written as *_decompiled.asm and *_decompiled.py.\n\n"
+                    "[bold cyan]C64U SID Playback:[/]\n"
+                    "• Press [bold white]Ctrl+P[/] or use Play SID to upload the selected tune.\n"
+                    "• Playback uses the Ultimate firmware's built-in SID player.\n\n"
+                    "[bold cyan]SID Compiler:[/]\n"
+                    "• Press [bold white]Ctrl+B[/] to rebuild the loaded decompiled source as SID.\n"
+                    "• Original PSID/RSID metadata and embedded load-address form are preserved.\n\n"
                     "[bold cyan]Control Flow & Statements:[/]\n"
                     "• [green]while cond:[/], [green]while True:[/], [green]break[/], [green]continue[/]\n"
                     "• [green]for i in range(stop):[/] or [green]for i in range(start, stop, step):[/]\n"
@@ -484,7 +529,7 @@ class FilteredDirectoryTree(DirectoryTree):
             ".idea",
             ".vscode",
         }
-        supported = {".py", ".asm", ".s", ".prg", ".tap", ".c", ".h", ".sym", ".bin"}
+        supported = {".py", ".asm", ".s", ".sid", ".prg", ".tap", ".c", ".h", ".sym", ".bin"}
         filtered = []
         for p in paths:
             if p.name in ignored or p.name.startswith("."):
@@ -516,7 +561,7 @@ class OpenFileModal(ModalScreen[Optional[Path]]):
 
             tree = FilteredDirectoryTree(str(self.current_root), id="file-tree")
             yield tree
-            yield Label("Select a file (.py, .asm, .s, .prg) to open or run", id="lbl-file-preview")
+            yield Label("Select source, SID music, or a C64 binary to open/import", id="lbl-file-preview")
             with Horizontal(id="dialog-buttons"):
                 yield Button("Open / Run Selected", variant="success", id="btn-open-file")
                 yield Button("Cancel", variant="error", id="btn-cancel-open")
@@ -573,9 +618,13 @@ class OpenFileModal(ModalScreen[Optional[Path]]):
                         "6502 Assembly Source"
                         if ext in [".asm", ".s"]
                         else (
-                            "C64 Executable Binary (PRG)"
-                            if ext == ".prg"
-                            else ("C64 Cassette Tape Image (TAP)" if ext == ".tap" else "File")
+                            "PSID/RSID Music (reverse decompile)"
+                            if ext == ".sid"
+                            else (
+                                "C64 Executable Binary (PRG)"
+                                if ext == ".prg"
+                                else ("C64 Cassette Tape Image (TAP)" if ext == ".tap" else "File")
+                            )
                         )
                     )
                 )
@@ -611,6 +660,9 @@ class C64PythonToAsmApp(App):
         Binding("ctrl+s", "save_assembly", "Save ASM", show=False),
         Binding("ctrl+t", "export_tap", "Export TAP", show=False),
         Binding("ctrl+r", "reset_c64u", "Reset C64U", show=False),
+        Binding("ctrl+d", "decompile_sid", "Decompile SID", show=True),
+        Binding("ctrl+b", "compile_sid", "Compile SID", show=True),
+        Binding("ctrl+p", "play_sid", "Play SID", show=True),
         Binding("ctrl+q", "quit", "Quit", show=False),
     ]
 
@@ -621,6 +673,7 @@ class C64PythonToAsmApp(App):
         self.client = C64UClient()
         self.last_asm: str = ""
         self.last_prg_path: Optional[Path] = None
+        self.last_sid_path: Optional[Path] = None
         self.loaded_file: Optional[Path] = None
         self.file_mode: str = "py"  # "py" or "asm"
 
@@ -646,6 +699,12 @@ class C64PythonToAsmApp(App):
                 yield Button("📺 Screen (↑F6)", id="btn-screen-dump")
                 yield Button("💥 Reboot (↑F7)", id="btn-c64u-reboot")
                 yield Button("🚪 Quit (↑F8)", id="btn-quit")
+
+            with Horizontal(classes="toolbar-row", id="toolbar-row-3"):
+                yield Button("🎵 SID → ASM + PY (Ctrl+D)", id="btn-decompile-sid")
+                yield Button("🔨 ASM → SID (Ctrl+B)", id="btn-compile-sid")
+                yield Button("▶ Play SID on C64U (Ctrl+P)", id="btn-play-sid")
+                yield Static("PSID/RSID tools", classes="pane-title")
 
         with Horizontal(id="main-container"):
             # Left Column: Python Source Editor
@@ -839,6 +898,62 @@ class C64PythonToAsmApp(App):
             self.call_from_thread(log.write, f"[bold red]C64U DMA Run Error:[/] {ce}")
             self.notify("Could not send to C64U hardware. Check connection.", severity="warning")
 
+    @work(thread=True, exclusive=True)
+    def play_sid_on_c64u(self, path: Path) -> None:
+        """Upload a SID file and start the Ultimate firmware SID player."""
+        log = self.query_one("#build-log", RichLog)
+        try:
+            size = path.stat().st_size
+            self.call_from_thread(
+                log.write,
+                f"\n[bold yellow]Uploading {path.name} ({size} bytes) to the C64U SID player...[/]",
+            )
+            result = self.client.play_sid(path)
+            self.call_from_thread(
+                log.write,
+                f"[bold green]✓ SID playback started successfully![/] Response: {result}",
+            )
+            self.notify(
+                f"Playing {path.name} on C64U",
+                title="C64U SID Player",
+                severity="information",
+            )
+        except (OSError, C64UClientError, ValueError) as exc:
+            self.call_from_thread(log.write, f"[bold red]C64U SID playback failed:[/] {exc}")
+            self.notify(str(exc), title="C64U SID Player Error", severity="error")
+
+    @work(thread=True, exclusive=True)
+    def compile_loaded_sid(self, source_path: Path, source_text: str) -> None:
+        """Assemble the current decompiled source and rebuild its SID container."""
+        log = self.query_one("#build-log", RichLog)
+        try:
+            self.call_from_thread(
+                log.write,
+                f"\n[bold yellow]Compiling {source_path.name} back into SID...[/]",
+            )
+            result = compile_sid_source(
+                source_path,
+                template_sid=self.last_sid_path,
+                compiler=self.compiler,
+                source_text=source_text,
+            )
+            self.last_sid_path = result.output_sid
+            h = result.sid.header
+            self.call_from_thread(
+                log.write,
+                f"[bold green]✓ SID compiled:[/] {result.output_sid} "
+                f"({result.payload_size} bytes, load ${h.load_address:04X}, "
+                f"init ${h.init_address:04X}, play ${h.play_address:04X})",
+            )
+            self.notify(
+                f"Compiled {result.output_sid.name}",
+                title="SID Compiler",
+                severity="information",
+            )
+        except (OSError, SidCompileError) as exc:
+            self.call_from_thread(log.write, f"[bold red]SID compilation failed:[/] {exc}")
+            self.notify(str(exc), title="SID Compiler Error", severity="error")
+
     # -------------------------------------------------------------------------
     # Actions & Handlers
     # -------------------------------------------------------------------------
@@ -994,6 +1109,9 @@ class C64PythonToAsmApp(App):
                 log.write(f"[bold red]Failed to read {path.name}:[/] {e}")
                 self.notify(f"Error loading file: {e}", severity="error")
 
+        elif ext == ".sid":
+            self._load_sid_file(path)
+
         elif ext == ".prg":
             self.last_prg_path = path
             size = path.stat().st_size
@@ -1077,6 +1195,94 @@ class C64PythonToAsmApp(App):
                 pass
 
         return None
+
+    def _load_sid_file(self, path: Path) -> None:
+        """Reverse-decompile a PSID/RSID file and load both generated sources."""
+        log = self.query_one("#build-log", RichLog)
+        try:
+            result = decompile_sid_file(path)
+            asm_path = path.with_name(f"{path.stem}_decompiled.asm")
+            py_path = path.with_name(f"{path.stem}_decompiled.py")
+            asm_path.write_text(result.assembly, encoding="utf-8")
+            py_path.write_text(result.python, encoding="utf-8")
+
+            self.file_mode = "asm"
+            self.last_sid_path = path
+            self.loaded_file = asm_path
+            self.last_asm = result.assembly
+            self.last_prg_path = None
+            self.query_one("#asm-viewer", TextArea).text = result.assembly
+            self.query_one("#python-editor", TextArea).text = result.python
+            self.query_one("#tabs", TabbedContent).active = "tab-asm"
+
+            h = result.sid.header
+            log.write(
+                f"\n[bold green]✓ Reverse-decompiled {h.magic} v{h.version}: {path.name}[/]"
+            )
+            log.write(
+                f"[cyan]{h.name or '(untitled)'}[/] by {h.author or '(unknown)'} | "
+                f"load ${h.load_address:04X}, init ${h.init_address:04X}, "
+                f"play ${h.play_address:04X}, {h.songs} song(s)"
+            )
+            log.write(
+                f"[green]Recovered {result.instruction_count} instructions; "
+                f"preserved {result.data_byte_count} bytes as data.[/]"
+            )
+            log.write(f"[bold]ASM:[/] {asm_path}")
+            log.write(f"[bold]Python:[/] {py_path}")
+            for warning in result.warnings:
+                log.write(f"[yellow]Warning:[/] {warning}")
+            self.notify(
+                f"SID decompiled to {asm_path.name} and {py_path.name}",
+                title="SID Reverse Decompiler",
+                severity="information",
+            )
+        except (OSError, SidDecompileError) as exc:
+            log.write(f"[bold red]SID decompile failed:[/] {exc}")
+            self.notify(str(exc), title="SID Decompile Error", severity="error")
+
+    def action_decompile_sid(self) -> None:
+        """Choose a SID file and reverse-decompile it to ASM and Python sidecars."""
+        def on_file_selected(file_path: Optional[Path]) -> None:
+            if not file_path:
+                return
+            if file_path.suffix.lower() != ".sid":
+                self.notify("Select a .sid (PSID/RSID) file", severity="warning")
+                return
+            self._load_sid_file(file_path)
+
+        self.push_screen(OpenFileModal(initial_path=Path.cwd()), on_file_selected)
+
+    def action_play_sid(self) -> None:
+        """Play the last imported SID, or prompt for one when none is selected."""
+        if self.last_sid_path and self.last_sid_path.is_file():
+            self.play_sid_on_c64u(self.last_sid_path)
+            return
+
+        def on_file_selected(file_path: Optional[Path]) -> None:
+            if not file_path:
+                return
+            if file_path.suffix.lower() != ".sid":
+                self.notify("Select a .sid (PSID/RSID) file", severity="warning")
+                return
+            self.last_sid_path = file_path
+            self.play_sid_on_c64u(file_path)
+
+        self.push_screen(OpenFileModal(initial_path=Path.cwd()), on_file_selected)
+
+    def action_compile_sid(self) -> None:
+        """Compile the currently loaded decompiled source back into a SID file."""
+        if not self.loaded_file or self.loaded_file.suffix.lower() not in {".asm", ".s", ".py"}:
+            self.notify("Load a decompiled SID source first", severity="warning")
+            return
+        if self.file_mode == "asm":
+            source_text = self.query_one("#asm-viewer", TextArea).text
+        else:
+            source_text = self.query_one("#python-editor", TextArea).text
+        if "C64U_SID_METADATA:" not in source_text and not self.last_sid_path:
+            self.notify("Loaded source has no SID metadata or template", severity="warning")
+            return
+        self.compile_loaded_sid(self.loaded_file, source_text)
 
     def action_open_presets(self) -> None:
         """Display preset selector modal dialog."""
@@ -1353,6 +1559,12 @@ class C64PythonToAsmApp(App):
             self.action_reboot_c64u()
         elif btn_id == "btn-quit":
             self.action_quit()
+        elif btn_id == "btn-decompile-sid":
+            self.action_decompile_sid()
+        elif btn_id == "btn-compile-sid":
+            self.action_compile_sid()
+        elif btn_id == "btn-play-sid":
+            self.action_play_sid()
         elif btn_id == "hw-run-prg":
             if self.last_prg_path and self.last_prg_path.exists():
                 self.client.run_prg(self.last_prg_path)

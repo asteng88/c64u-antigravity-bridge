@@ -30,6 +30,24 @@ def main():
     run_parser.add_argument("file", help="Path to .py, .asm, .s, .c, or .prg file")
     run_parser.add_argument("--assembler", choices=["auto", "kickass", "acme", "cc65"], default="auto")
 
+    # Command: sidplay (upload and invoke the built-in Ultimate SID player)
+    sid_parser = subparsers.add_parser("sidplay", help="Upload and play a PSID/RSID file on C64U")
+    sid_parser.add_argument("file", help="Path to a .sid file")
+    sid_parser.add_argument("--song", type=int, help="Optional one-based subtune number")
+
+    sid_compile_parser = subparsers.add_parser(
+        "sidcompile",
+        help="Assemble a C64U-decompiled ASM/Python source back into a SID file",
+    )
+    sid_compile_parser.add_argument("file", help="Path to decompiled .asm, .s, or .py source")
+    sid_compile_parser.add_argument("-o", "--output", help="Output .sid path")
+    sid_compile_parser.add_argument("--template", help="Original .sid file used to preserve metadata")
+    sid_compile_parser.add_argument(
+        "--assembler",
+        choices=["kickass", "acme"],
+        default="kickass",
+    )
+
     # Command: transpile (Python to 6502 asm)
     trans_parser = subparsers.add_parser("transpile", help="Convert Python source to MOS 6502 assembly")
     trans_parser.add_argument("file", help="Path to input Python file (.py)")
@@ -166,7 +184,37 @@ def main():
     compiler = CrossCompiler()
 
     try:
-        if args.command == "run":
+        if args.command == "sidcompile":
+            from .sid_compiler import compile_sid_source
+
+            result = compile_sid_source(
+                args.file,
+                output_sid=args.output,
+                template_sid=args.template,
+                assembler=args.assembler,
+                compiler=compiler,
+            )
+            h = result.sid.header
+            print(
+                f"Compiled SID: {result.output_sid} ({result.payload_size} payload bytes, "
+                f"load ${h.load_address:04X}, init ${h.init_address:04X}, "
+                f"play ${h.play_address:04X})"
+            )
+
+        elif args.command == "sidplay":
+            path = Path(args.file)
+            if not path.is_file():
+                print(f"Error: File not found: {path}", file=sys.stderr)
+                sys.exit(1)
+            if path.suffix.lower() != ".sid":
+                print(f"Error: Expected a .sid file: {path}", file=sys.stderr)
+                sys.exit(1)
+            print(f"Uploading {path.name} to the C64U SID player...")
+            res = client.play_sid(path, song=args.song)
+            song_text = f" subtune {args.song}" if args.song is not None else " default subtune"
+            print(f"Playing{song_text}: {res}")
+
+        elif args.command == "run":
             path = Path(args.file)
             if not path.exists():
                 print(f"Error: File not found: {path}", file=sys.stderr)

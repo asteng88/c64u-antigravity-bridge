@@ -37,6 +37,7 @@ async def test_filtered_directory_tree():
         Path("game_dev"),
         Path("game_dev/choplifter.asm"),
         Path("game_dev/choplifter.prg"),
+        Path("music/test.sid"),
         Path("random.xyz"),
     ]
     filtered = fdt.filter_paths(test_paths)
@@ -48,6 +49,7 @@ async def test_filtered_directory_tree():
     assert "game_dev" in names
     assert "choplifter.asm" in names
     assert "choplifter.prg" in names
+    assert "test.sid" in names
 
 
 @pytest.mark.anyio
@@ -208,6 +210,10 @@ async def test_two_row_toolbar_menu_and_bindings():
         for sfk in shift_f_keys:
             assert sfk in bound_keys, f"Missing binding for {sfk}"
 
-
-
+        assert app.query_one("#btn-decompile-sid", Button) is not None
+        assert app.query_one("#btn-compile-sid", Button) is not None
+        assert app.query_one("#btn-play-sid", Button) is not None
+        assert "ctrl+d" in bound_keys
+        assert "ctrl+b" in bound_keys
+        assert "ctrl+p" in bound_keys
 

@@ -112,6 +112,57 @@ class C64UClient:
         except Exception as e:
             raise C64UClientError(f"Failed to run Cartridge: {e}") from e
 
+    def play_sid(
+        self,
+        sid: Union[bytes, Path, str],
+        song: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Upload a PSID/RSID file and start the Ultimate's built-in SID player.
+
+        Args:
+            sid: Raw SID bytes or a path to a .sid file.
+            song: Optional one-based subtune number. The SID's default is used
+                when this is omitted.
+        """
+        if song is not None and song < 1:
+            raise ValueError("SID song number must be 1 or greater")
+
+        if isinstance(sid, Path):
+            data = sid.read_bytes()
+            filename = sid.name
+        elif isinstance(sid, str):
+            path = Path(sid)
+            data = path.read_bytes()
+            filename = path.name
+        else:
+            data = sid
+            filename = "music.sid"
+
+        headers = self._headers()
+        headers.update(
+            {
+                "Content-Type": "application/octet-stream",
+                "Content-Disposition": f'attachment; filename="{filename.replace(chr(34), "_")}"',
+            }
+        )
+        params = {"songnr": str(song)} if song is not None else None
+        url = f"{self.base_url}/runners:sidplay"
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                res = client.post(url, content=data, params=params, headers=headers)
+                res.raise_for_status()
+                result = res.json() if res.content else {"status": "success"}
+                errors = result.get("errors", []) if isinstance(result, dict) else []
+                if errors:
+                    raise C64UClientError("; ".join(str(error) for error in errors))
+                if isinstance(result, dict):
+                    result.setdefault("bytes_sent", len(data))
+                return result
+        except C64UClientError:
+            raise
+        except Exception as e:
+            raise C64UClientError(f"Failed to play SID on C64U: {e}") from e
+
     def read_memory(self, address: int, length: int) -> bytes:
         """
         Read a block of memory from the C64 via DMA.

@@ -54,6 +54,52 @@ def create_tool_definitions() -> List[Dict[str, Any]]:
             }
         },
         {
+            "name": "c64_play_sid",
+            "description": "Uploads a PSID/RSID music file and starts it in the C64U built-in SID player.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sid_path": {
+                        "type": "string",
+                        "description": "Path to the .sid file."
+                    },
+                    "song": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional one-based subtune number; omit to use the file default."
+                    }
+                },
+                "required": ["sid_path"]
+            }
+        },
+        {
+            "name": "c64_compile_sid",
+            "description": "Assembles a C64U-decompiled ASM/Python source back into a PSID/RSID file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "source_path": {
+                        "type": "string",
+                        "description": "Path to the decompiled .asm, .s, or .py source."
+                    },
+                    "output_path": {
+                        "type": "string",
+                        "description": "Optional destination .sid path."
+                    },
+                    "template_path": {
+                        "type": "string",
+                        "description": "Optional original .sid file for metadata preservation."
+                    },
+                    "assembler": {
+                        "type": "string",
+                        "enum": ["kickass", "acme"],
+                        "default": "kickass"
+                    }
+                },
+                "required": ["source_path"]
+            }
+        },
+        {
             "name": "c64_inspect_screen",
             "description": "Reads the C64 standard Screen RAM ($0400-$07E7) and Color RAM ($D800-$DBE7) from hardware and returns a formatted 40x25 ASCII grid.",
             "inputSchema": {
@@ -187,6 +233,37 @@ class MCPServerHandler:
                     return f"❌ File not found: {prg_path}"
                 res = self.client.run_prg(prg_path)
                 return f"✅ Executed {prg_path.name} on C64U via DMA: {res}"
+
+            elif name == "c64_play_sid":
+                sid_path = Path(args.get("sid_path"))
+                if not sid_path.is_file():
+                    return f"❌ File not found: {sid_path}"
+                if sid_path.suffix.lower() != ".sid":
+                    return f"❌ Expected a .sid file: {sid_path}"
+                song = args.get("song")
+                res = self.client.play_sid(sid_path, song=int(song) if song is not None else None)
+                tune = f"subtune {song}" if song is not None else "default subtune"
+                return f"✅ Playing {sid_path.name} ({tune}) on the C64U SID player: {res}"
+
+            elif name == "c64_compile_sid":
+                from .sid_compiler import compile_sid_source
+
+                source_path = Path(args.get("source_path"))
+                if not source_path.is_file():
+                    return f"❌ File not found: {source_path}"
+                result = compile_sid_source(
+                    source_path,
+                    output_sid=args.get("output_path"),
+                    template_sid=args.get("template_path"),
+                    assembler=args.get("assembler", "kickass"),
+                    compiler=self.compiler,
+                )
+                h = result.sid.header
+                return (
+                    f"✅ Compiled {source_path.name} to {result.output_sid.name} "
+                    f"({result.payload_size} bytes, load ${h.load_address:04X}, "
+                    f"init ${h.init_address:04X}, play ${h.play_address:04X})"
+                )
 
             elif name == "c64_inspect_screen":
                 screen_mem = self.client.read_memory(0x0400, 1000)
