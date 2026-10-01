@@ -22,9 +22,11 @@ async def test_tui_app_mount():
         tree = app.query_one("#ast-tree", Tree)
         assert tree is not None
 
-        # Verify Open File (F3) button exists in toolbar
-        btn_open = app.query_one("#btn-open", Button)
-        assert btn_open is not None
+        # Verify Tiered Menu Bar and Quick Run button exist
+        btn_file = app.query_one("#menu-btn-file", Button)
+        assert btn_file is not None
+        btn_quick_run = app.query_one("#quick-btn-run", Button)
+        assert btn_quick_run is not None
 
 
 @pytest.mark.anyio
@@ -109,18 +111,11 @@ async def test_open_file_modal_composition():
 
 
 @pytest.mark.anyio
-async def test_refresh_connection_button_and_action():
+async def test_refresh_connection_and_action():
     app = C64PythonToAsmApp()
     async with app.run_test() as pilot:
-        btn_refresh = app.query_one("#btn-refresh", Button)
-        assert btn_refresh is not None
-
         # Trigger F4 action directly
         app.action_refresh_connection()
-        await pilot.pause()
-
-        # Trigger via button click
-        btn_refresh.press()
         await pilot.pause()
 
 
@@ -128,7 +123,7 @@ async def test_refresh_connection_button_and_action():
 async def test_reset_c64u_button_and_action():
     app = C64PythonToAsmApp()
     async with app.run_test() as pilot:
-        btn_reset = app.query_one("#btn-c64u-reset", Button)
+        btn_reset = app.query_one("#quick-btn-reset", Button)
         assert btn_reset is not None
 
         # Verify F8 binding is registered
@@ -144,61 +139,66 @@ async def test_reset_c64u_button_and_action():
 
 
 @pytest.mark.anyio
-async def test_export_tap_button_and_action():
+async def test_export_tap_and_action():
     app = C64PythonToAsmApp()
     async with app.run_test() as pilot:
-        btn_tap = app.query_one("#btn-export-tap", Button)
-        assert btn_tap is not None
-
-        # Verify Ctrl+T binding is registered
+        # Verify Ctrl+T and Shift+F2 bindings are registered
         assert any(b.key == "ctrl+t" and b.action == "export_tap" for b in app.BINDINGS)
+        assert any(b.key == "shift+f2" and b.action == "export_tap" for b in app.BINDINGS)
 
         # Trigger action directly
         app.action_export_tap()
         await pilot.pause()
 
-        # Trigger via button press
-        btn_tap.press()
-        await pilot.pause()
-
 
 @pytest.mark.anyio
-async def test_two_row_toolbar_menu_and_bindings():
+async def test_tiered_menu_bar_and_bindings():
     app = C64PythonToAsmApp()
     async with app.run_test() as pilot:
-        # Check Row 1 has 8 buttons (F1-F8 in order)
-        row1 = app.query_one("#toolbar-row-1")
-        assert row1 is not None
-        row1_buttons = row1.query(Button)
-        assert len(row1_buttons) == 8
-        row1_ids = [b.id for b in row1_buttons]
-        assert row1_ids == [
-            "btn-help",
-            "btn-presets",
-            "btn-open",
-            "btn-refresh",
-            "btn-run",
-            "btn-transpile",
-            "btn-assemble",
-            "btn-c64u-reset",
+        # Check Menu Bar has the 5 tiered category buttons + quick action buttons
+        menu_bar = app.query_one("#menu-bar")
+        assert menu_bar is not None
+        menu_buttons = menu_bar.query(Button)
+        assert len(menu_buttons) == 7
+        button_ids = [b.id for b in menu_buttons]
+        assert button_ids == [
+            "menu-btn-file",
+            "menu-btn-build",
+            "menu-btn-device",
+            "menu-btn-sid",
+            "menu-btn-help",
+            "quick-btn-run",
+            "quick-btn-reset",
         ]
 
-        # Check Row 2 has 8 buttons (Shift+F1 to Shift+F8)
-        row2 = app.query_one("#toolbar-row-2")
-        assert row2 is not None
-        row2_buttons = row2.query(Button)
-        assert len(row2_buttons) == 8
-        row2_ids = [b.id for b in row2_buttons]
-        assert row2_ids == [
-            "btn-save",
-            "btn-export-tap",
-            "btn-load-prg",
-            "btn-pause-cpu",
-            "btn-resume-cpu",
-            "btn-screen-dump",
-            "btn-c64u-reboot",
-            "btn-quit",
-        ]
+        # Test opening the File menu dropdown
+        btn_file = app.query_one("#menu-btn-file", Button)
+        btn_file.press()
+        await pilot.pause()
+
+        # Check that MenuDropdownModal opened
+        from c64u_bridge.tui import MenuDropdownModal
+        modal = app.screen
+        assert isinstance(modal, MenuDropdownModal)
+        assert modal.category == "file"
+
+        # Check options in the dropdown
+        opts = modal.query_one("#menu-dropdown-options")
+        assert opts is not None
+        assert opts.option_count >= 4
+
+        # Test switching categories via Left/Right navigation
+        modal.action_menu_next()
+        assert modal.category == "build"
+        modal.action_menu_next()
+        assert modal.category == "device"
+        modal.action_menu_prev()
+        assert modal.category == "build"
+
+        # Test closing menu via escape
+        modal.action_dismiss_menu()
+        await pilot.pause()
+        assert not isinstance(app.screen, MenuDropdownModal)
 
         # Check F1-F8 and Shift+F1-Shift+F8 key bindings
         f_keys = [f"f{i}" for i in range(1, 9)]
@@ -210,10 +210,13 @@ async def test_two_row_toolbar_menu_and_bindings():
         for sfk in shift_f_keys:
             assert sfk in bound_keys, f"Missing binding for {sfk}"
 
-        assert app.query_one("#btn-decompile-sid", Button) is not None
-        assert app.query_one("#btn-compile-sid", Button) is not None
-        assert app.query_one("#btn-play-sid", Button) is not None
         assert "ctrl+d" in bound_keys
         assert "ctrl+b" in bound_keys
         assert "ctrl+p" in bound_keys
+        assert "f10" in bound_keys
+        assert "alt+f" in bound_keys
+        assert "alt+b" in bound_keys
+        assert "alt+c" in bound_keys
+        assert "alt+s" in bound_keys
+        assert "alt+h" in bound_keys
 

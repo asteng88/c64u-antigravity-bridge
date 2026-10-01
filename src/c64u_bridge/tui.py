@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
 
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -61,208 +61,101 @@ Footer {
     color: #8b949e;
 }
 
-#toolbar {
-    height: 6;
+#menu-bar {
+    height: 1;
     background: #161b36;
     padding: 0 1;
     border-bottom: solid #352879;
 }
 
-.toolbar-row {
+.menu-bar-btn {
     height: 1;
-    margin: 0;
-    align: left middle;
-}
-
-#toolbar-row-1 {
-    margin-top: 0;
-    margin-bottom: 1;
-}
-
-#toolbar-row-2 {
-    margin-top: 0;
-    margin-bottom: 1;
-}
-
-#toolbar-row-3 {
-    margin-top: 0;
-}
-
-#toolbar Button {
-    margin-right: 1;
     min-width: 8;
-    height: 1;
     border: none;
+    background: #161b36;
+    color: #e6edf3;
     padding: 0 1;
+    margin-right: 1;
 }
 
-/* Row 1 - Function Keys F1 to F8 */
-#btn-help {
-    background: #374151;
+.menu-bar-btn:hover {
+    background: #352879;
+    color: #ffffff;
+    text-style: bold;
+}
+
+.menu-bar-btn:focus {
+    background: #4b3ba6;
     color: #ffffff;
 }
-#btn-help:hover {
-    background: #4b5563;
-}
 
-#btn-presets {
-    background: #6e40c9;
-    color: #ffffff;
-}
-#btn-presets:hover {
-    background: #8957e5;
-}
-
-#btn-open {
-    background: #0969da;
-    color: #ffffff;
-}
-#btn-open:hover {
-    background: #1f6feb;
-}
-
-#btn-refresh {
-    background: #0284c7;
-    color: #ffffff;
-}
-#btn-refresh:hover {
-    background: #0369a1;
-}
-
-#btn-run {
+.quick-run-btn {
+    height: 1;
+    min-width: 10;
+    border: none;
     background: #238636;
     color: #ffffff;
     text-style: bold;
+    padding: 0 1;
+    margin-right: 1;
 }
-#btn-run:hover {
+
+.quick-run-btn:hover {
     background: #2ea043;
 }
 
-#btn-transpile {
-    background: #352879;
-    color: #ffffff;
-}
-#btn-transpile:hover {
-    background: #4b3ba6;
-}
-
-#btn-assemble {
-    background: #1f6feb;
-    color: #ffffff;
-}
-#btn-assemble:hover {
-    background: #388bfd;
-}
-
-#btn-c64u-reset {
+.quick-reset-btn {
+    height: 1;
+    min-width: 10;
+    border: none;
     background: #d97706;
     color: #ffffff;
     text-style: bold;
+    padding: 0 1;
+    margin-right: 1;
 }
-#btn-c64u-reset:hover {
+
+.quick-reset-btn:hover {
     background: #f59e0b;
 }
 
-/* Row 2 - Shift Commands */
-#btn-save {
-    background: #2563eb;
-    color: #ffffff;
-}
-#btn-save:hover {
-    background: #3b82f6;
-}
-
-#btn-export-tap {
-    background: #0e7490;
-    color: #ffffff;
-    text-style: bold;
-}
-#btn-export-tap:hover {
-    background: #0891b2;
-}
-
-#btn-load-prg {
-    background: #059669;
-    color: #ffffff;
-}
-#btn-load-prg:hover {
-    background: #10b981;
-}
-
-#btn-pause-cpu {
-    background: #b45309;
-    color: #ffffff;
-}
-#btn-pause-cpu:hover {
-    background: #d97706;
-}
-
-#btn-resume-cpu {
-    background: #15803d;
-    color: #ffffff;
-}
-#btn-resume-cpu:hover {
-    background: #16a34a;
-}
-
-#btn-screen-dump {
-    background: #7c3aed;
-    color: #ffffff;
-}
-#btn-screen-dump:hover {
-    background: #8b5cf6;
-}
-
-#btn-c64u-reboot {
-    background: #b91c1c;
-    color: #ffffff;
-    text-style: bold;
-}
-#btn-c64u-reboot:hover {
-    background: #dc2626;
-}
-
-#btn-quit {
-    background: #4b5563;
-    color: #ffffff;
-}
-#btn-quit:hover {
-    background: #6b7280;
-}
-
-#btn-decompile-sid {
-    background: #9333ea;
-    color: #ffffff;
-    text-style: bold;
-}
-#btn-decompile-sid:hover {
-    background: #a855f7;
-}
-
-#btn-play-sid {
-    background: #0f766e;
-    color: #ffffff;
-    text-style: bold;
-}
-#btn-play-sid:hover {
-    background: #0d9488;
-}
-
-#btn-compile-sid {
-    background: #0369a1;
-    color: #ffffff;
-    text-style: bold;
-}
-#btn-compile-sid:hover {
-    background: #0284c7;
-}
-
 #bridge-status {
-    width: 24;
+    width: 28;
     content-align: right middle;
     text-style: bold;
     color: #8b949e;
     margin-left: 1;
+}
+
+/* Tiered Menu Dropdown Overlay */
+MenuDropdownModal {
+    background: rgba(0, 0, 0, 0.25);
+    align: left top;
+}
+
+#menu-dropdown-box {
+    width: 44;
+    height: auto;
+    background: #161b36;
+    border: heavy #70a4b2;
+    padding: 0;
+}
+
+#menu-dropdown-title {
+    background: #1f244a;
+    color: #b8c76f;
+    text-style: bold;
+    padding: 0 1;
+    height: 1;
+    text-align: center;
+}
+
+#menu-dropdown-options {
+    height: auto;
+    max-height: 14;
+    background: #161b36;
+    border: none;
+    padding: 0;
 }
 
 #main-container {
@@ -484,7 +377,13 @@ class HelpModal(ModalScreen[None]):
                     "• [green]for i in range(stop):[/] or [green]for i in range(start, stop, step):[/]\n"
                     "• [green]if cond:[/], [green]elif cond:[/], [green]else:[/]\n"
                     "• Functions: [green]def my_sub():[/] compiled to subroutine with [green]rts[/]\n\n"
-                    "[bold cyan]Line 1 — Function Key Shortcuts:[/]\n"
+                    "[bold cyan]Tiered Menu Bar & Navigation:[/]\n"
+                    "• [bold white]F10[/] or click any top-level menu ([yellow]File ▾[/], [yellow]Build ▾[/], [yellow]C64 Device ▾[/], [yellow]SID Audio ▾[/], [yellow]Help ▾[/])\n"
+                    "• [bold white]Alt+F[/]: File Menu | [bold white]Alt+B[/]: Build Menu | [bold white]Alt+C[/]: Device Menu\n"
+                    "• [bold white]Alt+S[/]: SID Menu  | [bold white]Alt+H[/]: Help Menu\n"
+                    "• [bold white]Left / Right Arrow[/]: Glide between adjacent top-level menus\n"
+                    "• [bold white]Escape[/]: Dismiss open menu dropdown\n\n"
+                    "[bold cyan]Function Key Shortcuts (F1 - F8):[/]\n"
                     "• [bold white]F1[/]: Open this Reference Guide & Help\n"
                     "• [bold white]F2[/]: Open Preset 6502 Demos\n"
                     "• [bold white]F3[/]: Open File Browser (game_dev/, examples/)\n"
@@ -493,7 +392,7 @@ class HelpModal(ModalScreen[None]):
                     "• [bold white]F6[/]: Transpile Python to 6502 Assembly\n"
                     "• [bold white]F7[/]: Assemble to C64 PRG binary\n"
                     "• [bold white]F8[/]: Soft Reset C64U Machine\n\n"
-                    "[bold cyan]Line 2 — Shift Key Commands (↑F1 - ↑F8):[/]\n"
+                    "[bold cyan]Shift Key & Ctrl Key Commands:[/]\n"
                     "• [bold white]↑F1 (Shift+F1) / Ctrl+S[/]: Save Current Assembly\n"
                     "• [bold white]↑F2 (Shift+F2) / Ctrl+T[/]: Export to TAP Cassette Tape Image (.tap)\n"
                     "• [bold white]↑F3 (Shift+F3)[/]: DMA Load PRG into RAM (without running)\n"
@@ -633,6 +532,163 @@ class OpenFileModal(ModalScreen[Optional[Path]]):
                 )
 
 
+MENU_DEFINITIONS: dict[str, dict[str, object]] = {
+    "file": {
+        "title": "📁 File (cursor keys navigate)",
+        "offset": 1,
+        "items": [
+            ("📂 Open File...", "open_file", "F3"),
+            ("💾 Save ASM Source", "save_assembly", "⇧+F1"),
+            ("📼 Export Cassette Tape Image", "export_tap", "⇧+F2"),
+            ("────────────────────────────────────", "", None),
+            ("🚪 Quit Studio", "quit", "⇧+F8"),
+        ],
+    },
+    "build": {
+        "title": "⚙  Build & Run",
+        "offset": 12,
+        "items": [
+            ("⚡ DMA Run (Assemble & Exec)", "run_c64u", "F5"),
+            ("⚙  Transpile Python → 6502", "transpile_code", "F6"),
+            ("🔨 Assemble to PRG (KickAss)", "assemble_prg", "F7"),
+            ("📥 DMA Load to RAM (No Exec)", "load_prg_only", "⇧+F3"),
+        ],
+    },
+    "device": {
+        "title": "🕹  C64 Device",
+        "offset": 24,
+        "items": [
+            ("🔄 Refresh / Ping Connection", "refresh_connection", "F4"),
+            ("🔁 Soft Reset C64", "reset_c64u", "F8"),
+            ("⏸  Pause CPU", "pause_cpu", "⇧+F4"),
+            (" ▶ Resume CPU", "resume_cpu", "⇧+F5"),
+            ("📺 Inspect Screen Dump", "dump_screen", "⇧+F6"),
+            ("────────────────────────────────────", "", None),
+            ("💥 Cold Reboot Hardware", "reboot_c64u", "⇧+F7"),
+        ],
+    },
+    "sid": {
+        "title": "🎵 SID Audio",
+        "offset": 43,
+        "items": [
+            ("🎵 SID → ASM + Python", "decompile_sid", "^D"),
+            ("🎵 ASM → SID Compile", "compile_sid", "^B"),
+            ("🎵 Play SID on Hardware", "play_sid", "^P"),
+        ],
+    },
+    "help": {
+        "title": "❓ Help",
+        "offset": 58,
+        "items": [
+            ("📚 Preset Examples & Demos", "open_presets", "F2"),
+            ("❓ Reference Guide & Help", "show_help", "F1"),
+        ],
+    },
+}
+
+
+class MenuDropdownModal(ModalScreen[Optional[str]]):
+    """Dropdown overlay for tiered top-level menus."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_menu", "Close", show=False),
+        Binding("left", "menu_prev", "Previous Menu", show=False),
+        Binding("right", "menu_next", "Next Menu", show=False),
+    ]
+
+    def __init__(self, category: str = "file", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.category = category if category in MENU_DEFINITIONS else "file"
+
+    def compose(self) -> ComposeResult:
+        menu = MENU_DEFINITIONS[self.category]
+        with Vertical(id="menu-dropdown-box"):
+            yield Static(menu["title"], id="menu-dropdown-title")
+            options = self._build_options(self.category)
+            yield OptionList(*options, id="menu-dropdown-options")
+
+    def _build_options(self, category: str) -> list[Option]:
+        menu = MENU_DEFINITIONS[category]
+        options: list[Option] = []
+        for idx, (label, action_id, shortcut) in enumerate(menu["items"]):
+            if not action_id:
+                options.append(Option(label, id=f"sep_{idx}", disabled=True))
+            else:
+                pad = 34 - len(label) - (len(shortcut) if shortcut else 0)
+                if pad < 2:
+                    pad = 2
+                text = f"{label}{' ' * pad}[cyan]{shortcut}[/]" if shortcut else label
+                options.append(Option(text, id=action_id))
+        return options
+
+    def on_mount(self) -> None:
+        self._position_menu(self.category)
+
+    def _position_menu(self, category: str) -> None:
+        menu = MENU_DEFINITIONS[category]
+        box = self.query_one("#menu-dropdown-box")
+        max_offset = max(1, self.app.size.width - 46)
+        actual_offset = min(menu["offset"], max_offset)
+        box.styles.margin = (2, 0, 0, actual_offset)
+
+    def switch_to_category(self, new_category: str) -> None:
+        if new_category not in MENU_DEFINITIONS or new_category == self.category:
+            return
+        self.category = new_category
+        menu = MENU_DEFINITIONS[self.category]
+        self.query_one("#menu-dropdown-title", Static).update(menu["title"])
+        self._position_menu(self.category)
+
+        opt_list = self.query_one("#menu-dropdown-options", OptionList)
+        opt_list.clear_options()
+        for opt in self._build_options(self.category):
+            opt_list.add_option(opt)
+        opt_list.highlighted = 0
+
+    def action_menu_prev(self) -> None:
+        cats = list(MENU_DEFINITIONS.keys())
+        idx = cats.index(self.category)
+        new_cat = cats[(idx - 1) % len(cats)]
+        self.switch_to_category(new_cat)
+
+    def action_menu_next(self) -> None:
+        cats = list(MENU_DEFINITIONS.keys())
+        idx = cats.index(self.category)
+        new_cat = cats[(idx + 1) % len(cats)]
+        self.switch_to_category(new_cat)
+
+    def action_dismiss_menu(self) -> None:
+        self.dismiss(None)
+
+    def on_click(self, event: events.Click) -> None:
+        if event.screen_y == 1:
+            x = event.screen_x
+            if 0 <= x < 11:
+                self.switch_to_category("file")
+                return
+            elif 11 <= x < 23:
+                self.switch_to_category("build")
+                return
+            elif 23 <= x < 40:
+                self.switch_to_category("device")
+                return
+            elif 40 <= x < 55:
+                self.switch_to_category("sid")
+                return
+            elif 55 <= x < 70:
+                self.switch_to_category("help")
+                return
+
+        box = self.query_one("#menu-dropdown-box")
+        if not box.region.contains(event.screen_x, event.screen_y):
+            self.dismiss(None)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        action_id = str(event.option.id)
+        if not action_id.startswith("sep_"):
+            self.dismiss(action_id)
+
+
 class C64PythonToAsmApp(App):
     """Textual TUI for Commodore 64 Python development and C64U execution."""
 
@@ -642,28 +698,34 @@ class C64PythonToAsmApp(App):
 
     BINDINGS = [
         Binding("f1", "show_help", "Help", show=True),
-        Binding("f2", "open_presets", "Presets", show=True),
-        Binding("f3", "open_file", "Open File", show=True),
-        Binding("f4", "refresh_connection", "Refresh", show=True),
+        Binding("f2", "open_presets", "Presets", show=False),
+        Binding("f3", "open_file", "Open", show=True),
+        Binding("f4", "refresh_connection", "Refresh", show=False),
         Binding("f5", "run_c64u", "Run C64U", show=True),
-        Binding("f6", "transpile_code", "Transpile", show=True),
-        Binding("f7", "assemble_prg", "Assemble", show=True),
+        Binding("f6", "transpile_code", "Transpile", show=False),
+        Binding("f7", "assemble_prg", "Assemble", show=False),
         Binding("f8", "reset_c64u", "Reset C64U", show=True),
-        Binding("shift+f1", "save_assembly", "Save ASM", show=True),
-        Binding("shift+f2", "export_tap", "Export TAP", show=True),
-        Binding("shift+f3", "load_prg_only", "Load PRG", show=True),
-        Binding("shift+f4", "pause_cpu", "Pause CPU", show=True),
-        Binding("shift+f5", "resume_cpu", "Resume CPU", show=True),
-        Binding("shift+f6", "dump_screen", "Screen Dump", show=True),
-        Binding("shift+f7", "reboot_c64u", "Reboot C64U", show=True),
-        Binding("shift+f8", "quit", "Quit", show=True),
+        Binding("f10", "open_menu_category('file')", "Menu Bar", show=True),
+        Binding("shift+f1", "save_assembly", "Save ASM", show=False),
+        Binding("shift+f2", "export_tap", "Export TAP", show=False),
+        Binding("shift+f3", "load_prg_only", "Load PRG", show=False),
+        Binding("shift+f4", "pause_cpu", "Pause CPU", show=False),
+        Binding("shift+f5", "resume_cpu", "Resume CPU", show=False),
+        Binding("shift+f6", "dump_screen", "Screen Dump", show=False),
+        Binding("shift+f7", "reboot_c64u", "Reboot C64U", show=False),
+        Binding("shift+f8", "quit", "Quit", show=False),
         Binding("ctrl+s", "save_assembly", "Save ASM", show=False),
         Binding("ctrl+t", "export_tap", "Export TAP", show=False),
         Binding("ctrl+r", "reset_c64u", "Reset C64U", show=False),
-        Binding("ctrl+d", "decompile_sid", "Decompile SID", show=True),
-        Binding("ctrl+b", "compile_sid", "Compile SID", show=True),
-        Binding("ctrl+p", "play_sid", "Play SID", show=True),
-        Binding("ctrl+q", "quit", "Quit", show=False),
+        Binding("ctrl+d", "decompile_sid", "Decompile SID", show=False),
+        Binding("ctrl+b", "compile_sid", "Compile SID", show=False),
+        Binding("ctrl+p", "play_sid", "Play SID", show=False),
+        Binding("ctrl+q", "quit", "Quit", show=True),
+        Binding("alt+f", "open_menu_category('file')", "File", show=False),
+        Binding("alt+b", "open_menu_category('build')", "Build", show=False),
+        Binding("alt+c", "open_menu_category('device')", "Device", show=False),
+        Binding("alt+s", "open_menu_category('sid')", "SID", show=False),
+        Binding("alt+h", "open_menu_category('help')", "Help", show=False),
     ]
 
     def __init__(self, **kwargs):
@@ -679,32 +741,15 @@ class C64PythonToAsmApp(App):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        with Vertical(id="toolbar"):
-            with Horizontal(classes="toolbar-row", id="toolbar-row-1"):
-                yield Button("❓ Help (F1)", id="btn-help")
-                yield Button("📚 Presets (F2)", id="btn-presets")
-                yield Button("📂 Open (F3)", id="btn-open")
-                yield Button("🔄 Refresh (F4)", id="btn-refresh")
-                yield Button("⚡ Run (F5)", id="btn-run")
-                yield Button("⚙ Trans (F6)", id="btn-transpile")
-                yield Button("🔨 Asm (F7)", id="btn-assemble")
-                yield Button("🔁 Reset (F8)", id="btn-c64u-reset")
-
-            with Horizontal(classes="toolbar-row", id="toolbar-row-2"):
-                yield Button("💾 Save (↑F1)", id="btn-save")
-                yield Button("📼 TAP (↑F2)", id="btn-export-tap")
-                yield Button("📥 Load (↑F3)", id="btn-load-prg")
-                yield Button("⏸ Pause (↑F4)", id="btn-pause-cpu")
-                yield Button("▶ Resume (↑F5)", id="btn-resume-cpu")
-                yield Button("📺 Screen (↑F6)", id="btn-screen-dump")
-                yield Button("💥 Reboot (↑F7)", id="btn-c64u-reboot")
-                yield Button("🚪 Quit (↑F8)", id="btn-quit")
-
-            with Horizontal(classes="toolbar-row", id="toolbar-row-3"):
-                yield Button("🎵 SID → ASM + PY (Ctrl+D)", id="btn-decompile-sid")
-                yield Button("🔨 ASM → SID (Ctrl+B)", id="btn-compile-sid")
-                yield Button("▶ Play SID on C64U (Ctrl+P)", id="btn-play-sid")
-                yield Static("PSID/RSID tools", classes="pane-title")
+        with Horizontal(id="menu-bar"):
+            yield Button("📁 File ▾", id="menu-btn-file", classes="menu-bar-btn")
+            yield Button("⚙ Build ▾", id="menu-btn-build", classes="menu-bar-btn")
+            yield Button("🕹 C64 Device ▾", id="menu-btn-device", classes="menu-bar-btn")
+            yield Button("🎵 SID Audio ▾", id="menu-btn-sid", classes="menu-bar-btn")
+            yield Button("❓ Help ▾", id="menu-btn-help", classes="menu-bar-btn")
+            yield Button("⚡ Run (F5)", id="quick-btn-run", classes="quick-run-btn")
+            yield Button("🔁 Reset (F8)", id="quick-btn-reset", classes="quick-reset-btn")
+            yield Static("● C64U: Checking...", id="bridge-status")
 
         with Horizontal(id="main-container"):
             # Left Column: Python Source Editor
@@ -1519,14 +1564,50 @@ class C64PythonToAsmApp(App):
             log.write(f"[bold red]✗ C64U Reboot Failed:[/] {e}")
             self.notify(f"Reboot failed: {e}", severity="error", title="C64U Hardware")
 
+    def open_menu(self, category: str = "file") -> None:
+        """Display tiered menu dropdown overlay."""
+        def on_action(action_id: Optional[str]) -> None:
+            if action_id:
+                self.dispatch_menu_action(action_id)
+
+        self.push_screen(MenuDropdownModal(category), on_action)
+
+    def action_open_menu_category(self, category: str) -> None:
+        """Action handler to open specific menu category via hotkey."""
+        self.open_menu(category)
+
+    def dispatch_menu_action(self, action_id: str) -> None:
+        """Dispatch action from dropdown menu selection."""
+        method_name = f"action_{action_id}"
+        handler = getattr(self, method_name, None)
+        if callable(handler):
+            handler()
+        else:
+            self.notify(f"Unknown action: {action_id}", severity="warning")
+
     def action_quit(self) -> None:
         """Exit the C64 studio application."""
         self.exit()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
-        # Row 1 - Function keys F1-F8
-        if btn_id == "btn-help":
+        # Tiered menu bar buttons
+        if btn_id == "menu-btn-file":
+            self.open_menu("file")
+        elif btn_id == "menu-btn-build":
+            self.open_menu("build")
+        elif btn_id == "menu-btn-device":
+            self.open_menu("device")
+        elif btn_id == "menu-btn-sid":
+            self.open_menu("sid")
+        elif btn_id == "menu-btn-help":
+            self.open_menu("help")
+        elif btn_id in ["btn-run", "quick-btn-run"]:
+            self.action_run_c64u()
+        elif btn_id in ["btn-c64u-reset", "quick-btn-reset"]:
+            self.action_reset_c64u()
+        # Row 1 - Function keys F1-F8 fallbacks
+        elif btn_id == "btn-help":
             self.action_show_help()
         elif btn_id == "btn-presets":
             self.action_open_presets()
@@ -1534,14 +1615,10 @@ class C64PythonToAsmApp(App):
             self.action_open_file()
         elif btn_id == "btn-refresh":
             self.action_refresh_connection()
-        elif btn_id == "btn-run":
-            self.action_run_c64u()
         elif btn_id == "btn-transpile":
             self.action_transpile_code()
         elif btn_id == "btn-assemble":
             self.action_assemble_prg()
-        elif btn_id == "btn-c64u-reset":
-            self.action_reset_c64u()
         # Row 2 - Shift commands
         elif btn_id == "btn-save":
             self.action_save_assembly()
