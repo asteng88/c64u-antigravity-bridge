@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security Vulnerability Reporting
+    url: https://github.com/asteng88/c64u-antigravity-bridge/blob/main/SECURITY.md
+    about: Please review our security policy and report vulnerabilities responsibly.
+  - name: Community & Questions
+    url: https://github.com/asteng88/c64u-antigravity-bridge/discussions
+    about: Ask questions, share demos, and discuss C64 hardware development.

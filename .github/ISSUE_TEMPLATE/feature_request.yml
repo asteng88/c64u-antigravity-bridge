@@ -1,0 +1,63 @@
+name: Feature Request
+description: Propose a new feature, hardware inspection tool, or workflow enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea for improving C64 development with AI agents or new C64U bridge capabilities? Let us know below!
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or Use Case
+      description: What challenge or development need does this feature address?
+      placeholder: Describe the situation or problem you are trying to solve.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_feature
+    attributes:
+      label: Proposed Feature
+      description: Detailed description of the feature or behavior you would like to see.
+      placeholder: Explain what the feature should do and how developers or AI agents would interact with it.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: workflow_affected
+    attributes:
+      label: C64 Development Workflow Affected
+      description: Which part of the bridge does this primarily impact?
+      options:
+        - AI / MCP Agent Tools & Telemetry
+        - Python-to-6502 Transpiler
+        - Cross-Assembler Orchestration (KickAss, ACME, CC65)
+        - C64U REST API & DMA Deployment
+        - Hardware Introspection (Screen, Color RAM, Zero Page, Registers)
+        - Retro Sprite Studio (Web/HTML5)
+        - SID Music & Audio Tools
+        - Cassette Tape Image Mastering (.tap)
+        - Textual Terminal IDE (TUI)
+        - CLI & Automation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or Workarounds Considered
+      description: Have you considered any alternative solutions, scripts, or workarounds?
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Willingness to Contribute / Test
+      options:
+        - label: I can help test this on physical C64 Ultimate / Ultimate 64 hardware.
+        - label: I am interested in submitting a pull request for this feature.

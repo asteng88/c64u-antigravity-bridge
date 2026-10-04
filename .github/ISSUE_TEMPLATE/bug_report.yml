@@ -1,0 +1,127 @@
+name: Bug Report
+description: Report a bug or hardware communication issue in C64U Antigravity Bridge
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide as much hardware and software detail as possible so we can reproduce and address the problem.
+
+  - type: input
+    id: version
+    attributes:
+      label: Bridge Version / Git Commit
+      description: What version of the bridge or git commit hash are you using?
+      placeholder: e.g., v1.0.0 or commit 7a8b9c...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: host_os
+    attributes:
+      label: Host Operating System
+      description: What operating system is running the bridge?
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (x86_64)
+        - Linux (ARM / Raspberry Pi)
+        - Other (specify in description)
+    validations:
+      required: true
+
+  - type: input
+    id: python_version
+    attributes:
+      label: Python Version
+      description: Output of `python --version`
+      placeholder: e.g., Python 3.11.8 or Python 3.12.2
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hardware_model
+    attributes:
+      label: Commodore 64 / Ultimate Hardware Model
+      description: Which C64 / Ultimate hardware are you targeting?
+      options:
+        - Ultimate 64
+        - Ultimate 64 Elite
+        - Physical C64 with Ultimate-II+ cartridge
+        - Physical C64 with Ultimate-II+L cartridge
+        - Other / Custom
+    validations:
+      required: true
+
+  - type: input
+    id: firmware_version
+    attributes:
+      label: C64U Firmware Version
+      description: Firmware version reported by your Ultimate device (e.g. from C64U menu or `c64u-bridge status`).
+      placeholder: e.g., 3.11, 3.12, or beta build
+    validations:
+      required: true
+
+  - type: dropdown
+    id: toolchain
+    attributes:
+      label: Assembler / Toolchain
+      description: Which assembler or compilation path was used?
+      options:
+        - KickAssembler v5.x
+        - ACME
+        - CC65 / cl65
+        - Python-to-6502 Transpiler
+        - None / Direct PRG upload
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection_type
+    attributes:
+      label: Connection Method
+      description: How is the C64U connected to the local network?
+      options:
+        - Ethernet (Wired LAN)
+        - Wi-Fi
+        - Direct Ethernet Cable / Ad-hoc
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Step-by-step instructions to reproduce the issue.
+      placeholder: |
+        1. Run command 'c64u-bridge ...'
+        2. Execute MCP tool '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior & Log Output
+      description: Paste relevant terminal output, logs, or error traces here.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional Context
+      description: Any other information, memory dumps, or configuration details.
