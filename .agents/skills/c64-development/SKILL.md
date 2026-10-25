@@ -19,6 +19,11 @@ Before writing code, consult the specialized reference manuals depending on the 
 * **[Memory Map, Banking & Zero-Page Architecture](./references/c64_memory_and_banking.md)**: Complete Zero-Page map, 6510 Port `$0001` banking (`$37`, `$36`, `$35`, `$34`), CIA 1 & CIA 2 registers, Kernal vectors, safe scratchpad pointers (`$FB-$FE`).
 * **[KickAssembler v5.x Practical Guide](./references/kickassembler_guide.md)**: Directives, `BasicUpstart2`, macros, pseudo-commands, compile-time trigonometric table scripting (`Math.sin()`), memory segments, and asset imports (`.import c64`, `.import binary`).
 * **[Python-to-6502 Transpiler Guide](./references/python_transpiler_guide.md)**: Supported Python subset, intrinsics (`poke`, `peek`, `border_color`, `background_color`, `wait_raster`, `clear_screen`, `print_str`, `sid_tone`, `asm`), and hybrid Python + ASM techniques.
+* **[Curated Core Documentation Index](./references/curated_core_docs.md)**: Reference-first routing into the repository's curated C64 manuals, including primary PDFs for VIC-II timing and 1541 behavior, KERNAL I/O, CIA, IEC, 6502 timing, SID, and memory mapping.
+
+### Reference-First Rule
+
+For hardware behavior, timing, ROM entry points, disk/IEC code, or instruction-cycle claims, consult the curated-document index first and use the source it routes to. The existing guides remain the concise implementation playbooks; the curated documents are the evidence layer and take precedence when the two disagree. Prefer the included primary PDFs over derivative material for VIC-II timing and 1541 details.
 
 ---
 
@@ -40,6 +45,7 @@ Before writing code, consult the specialized reference manuals depending on the 
 Create either a `.asm` (KickAssembler) or `.py` file in the workspace (e.g. `src/`, `examples/`, or `game_dev/`).
 * Always start assembly programs with `BasicUpstart2(entry_point)` and `* = $0810` unless producing a cartridge or relocatable driver.
 * Always acknowledge raster interrupts with `asl $d019` or `sta $d019`.
+* Before relying on a KERNAL jump-table entry, CIA interrupt behavior, or IEC/1541 protocol, consult the matching curated reference. These interfaces have register, flag, and sequencing requirements that should not be inferred.
 
 ### Step 2: Build & Deploy via DMA
 Use the MCP tool or CLI to compile and push the program directly into C64 RAM over the network:

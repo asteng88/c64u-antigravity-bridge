@@ -7,9 +7,8 @@ The MOS 6510 CPU features an on-chip 6-bit bidirectional I/O port located at mem
 ## 1. 6510 On-Chip Port Register `$0001` Banking Modes
 
 The 3 low bits of address `$0001` control the active memory configuration:
-* **Bit 0 (`LORAM`)**: 1 = BASIC ROM visible at `$A000-$BFFF`. 0 = RAM at `$A000-$BFFF`.
-* **Bit 1 (`HIRAM`)**: 1 = Kernal ROM visible at `$E000-$FFFF`. 0 = RAM at `$E000-$FFFF`.
-* **Bit 2 (`CHAREN`)**: 1 = I/O registers visible at `$D000-$DFFF`. 0 = Character ROM visible at `$D000-$DFFF`.
+* **Bit 0 (`LORAM`)** and **Bit 1 (`HIRAM`)**: BASIC ROM is visible at `$A000-$BFFF` only when **both** are 1. Kernal ROM is visible at `$E000-$FFFF` when `HIRAM` is 1.
+* **Bit 2 (`CHAREN`)**: when at least one of `LORAM`/`HIRAM` is 1, 1 selects I/O at `$D000-$DFFF` and 0 selects Character ROM. When both are 0, RAM is visible at `$D000-$DFFF` regardless of `CHAREN`.
 
 ### Banking Modes Table
 
@@ -18,8 +17,9 @@ The 3 low bits of address `$0001` control the active memory configuration:
 | `%xxx10111` | **`$37`** | BASIC ROM | I/O Registers | Kernal ROM | ~38 KB | Default state. BASIC programs and simple SYS launchers. |
 | `%xxx10110` | **`$36`** | **RAM** | I/O Registers | Kernal ROM | **~52 KB** | Machine language games needing Kernal routines (e.g., `CHROUT`, `GETIN`). |
 | `%xxx10101` | **`$35`** | **RAM** | **I/O Registers** | **RAM** | **~60 KB** | Pure ML games and demos with custom IRQ handlers. (Highest recommended configuration). |
-| `%xxx10100` | **`$34`** | **RAM** | **RAM** | **RAM** | **Full 64 KB**| Extreme demoscene demos, large graphics tables, or RAM under I/O. |
+| `%xxx10100` | **`$34`** | **RAM** | **I/O Registers** | **RAM** | **~60 KB** | Similar visible mapping to `$35`; use only when its port-line side effects are understood. |
 | `%xxx10011` | **`$33`** | BASIC ROM | Char ROM | Kernal ROM | ~38 KB | Character generation inspection. |
+| `%xxx10000` | **`$30`** | **RAM** | **RAM** | **RAM** | **Full 64 KB** | Access RAM beneath I/O; hardware registers are unavailable until banking is restored. |
 
 ### Switching to 60 KB RAM Mode (`$35`):
 ```kickassembler
@@ -49,7 +49,7 @@ Zero Page allows ultra-fast, 1-byte addressing modes (e.g. `lda ($fb),y`). Every
 | `$00C6` | Number of characters in keyboard buffer | Overwritten by Kernal keyboard scan |
 | `$00FB - $00FE`| **Free Kernal Zero Page Pointers** | **100% SAFE AT ALL TIMES** |
 
-> **Best Practice**: Use `$FB, $FC` and `$FD, $FE` as your primary 16-bit indirect pointers (`($FB),Y`). When banking to `$35` (Kernal disabled), addresses `$02` through `$7F` are entirely yours!
+> **Best Practice**: Use `$FB, $FC` and `$FD, $FE` as your primary 16-bit indirect pointers (`($FB),Y`). When banking to `$35` (Kernal disabled), addresses `$02` through `$7F` are available only if no active ROM/KERNAL/BASIC code or interrupt handler depends on them. Treat “safe” zero page as a property of the whole active program, not banking alone.
 
 ---
 
@@ -117,6 +117,6 @@ $FFFF +-----------------------------------+
 | **`$FFD2`** | `CHROUT` | Outputs ASCII/PETSCII character to active device / screen. | `A` = Character code |
 | **`$FFE4`** | `GETIN` | Reads one character from keyboard buffer without waiting. | `A` = Character (0 if buffer empty) |
 | **`$FF9F`** | `SCNKEY` | Scans keyboard matrix. | Call once per frame if polling keyboard |
-| **`$FFF0`** | `PLOT` | Set or get cursor position. | `Carry=0`: Set cursor (`X`=Row 0-24, `Y`=Col 0-39). `Carry=1`: Read cursor |
-| **`$FF81`** | `CINT` | Initialize VIC-II screen editor and clear screen. | None |
+| **`$FFF0`** | `PLOT` | Set or get cursor position. | `Carry=0`: Set cursor (`X`=Column 0-39, `Y`=Row 0-24). `Carry=1`: Read cursor |
+| **`$FF81`** | `SCINIT` | Initialize VIC-II screen editor and clear screen. | None |
 | **`$FFE1`** | `STOP` | Checks if RUN/STOP key is pressed. | Zero flag set if pressed |
