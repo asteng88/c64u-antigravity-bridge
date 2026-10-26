@@ -6,7 +6,6 @@ from c64u_bridge.compiler import CompilationResult
 from c64u_bridge.sid_compiler import build_sid, compile_sid_source
 from c64u_bridge.sid_decompiler import SidDecompileError, decompile_sid, parse_sid
 from c64u_bridge.tui import C64PythonToAsmApp
-from textual.widgets import TextArea
 
 
 def make_sid(*, embedded_load: bool = False) -> bytes:
@@ -123,5 +122,5 @@ async def test_tui_sid_import_writes_and_loads_sidecars(tmp_path: Path):
         assert app.file_mode == "asm"
         assert app.loaded_file == asm_path
         assert app.last_sid_path == sid_path
-        assert "sid_init:" in app.query_one("#asm-viewer", TextArea).text
-        assert "SID_INIT = 0x1000" in app.query_one("#python-editor", TextArea).text
+        assert "sid_init:" in app.query_one("#asm-viewer").text
+        assert "SID_INIT = 0x1000" in app.query_one("#python-editor").text

@@ -33,6 +33,7 @@ ENV/
 *.d64
 *.g64
 *.t64
+*.tap
 *.vs
 *.sym
 *.bin
@@ -49,3 +50,7 @@ htmlcov/
 # Downloaded tools & archives
 tools/
 *.zip
+
+# Example programs and games
+example_games/
+

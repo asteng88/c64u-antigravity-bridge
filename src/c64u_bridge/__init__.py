@@ -19,6 +19,7 @@ from .sprite import (
     create_commodore_logo_sprite,
     create_multicolor_airwolf_sprite,
 )
+from .d64 import asm_to_d64, create_d64, read_d64, save_prg_to_d64
 from .tap import asm_to_tap, prg_to_tap, save_prg_to_tap
 
 __all__ = [
@@ -29,6 +30,10 @@ __all__ = [
     "prg_to_tap",
     "save_prg_to_tap",
     "asm_to_tap",
+    "create_d64",
+    "read_d64",
+    "save_prg_to_d64",
+    "asm_to_d64",
     "Sprite",
     "SpriteMode",
     "SpriteTool",
@@ -38,3 +43,4 @@ __all__ = [
     "create_multicolor_airwolf_sprite",
     "create_commodore_logo_sprite",
 ]
+

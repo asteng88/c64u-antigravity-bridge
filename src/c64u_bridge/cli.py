@@ -56,8 +56,16 @@ def main():
     trans_parser.add_argument("--assemble", action="store_true", help="Also assemble to PRG using KickAssembler")
     trans_parser.add_argument("--run", action="store_true", help="DMA execute immediately on C64U")
 
-    # Command: tui (interactive Textual IDE)
-    subparsers.add_parser("tui", help="Launch interactive Textual TUI for Python-to-Assembly development")
+    # Command: tui (interactive C64 Lookalike Screen & 6502 ASM Studio in Tkinter)
+    tui_parser = subparsers.add_parser(
+        "tui",
+        help="Launch authentic Tkinter Commodore 64 Lookalike Screen & 6502 .asm / Python Studio",
+    )
+    tui_parser.add_argument(
+        "--no-boot",
+        action="store_true",
+        help="Skip the simulated C64 LOAD \"C64-BRIDGE\",8,1 startup animation",
+    )
 
     # Command: screen (dump screen buffer)
     screen_parser = subparsers.add_parser("screen", help="Inspect and display C64 screen memory ($0400-$07E7)")

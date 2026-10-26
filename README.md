@@ -111,7 +111,7 @@ The **C64U Antigravity Bridge** explores an emerging form of AI-assisted retro-c
    * 50-level Undo/Redo history (`Ctrl+Z`, `Ctrl+Y`), drawing tools (Pen, Erase, Flood Fill, Shift, Flip, Invert, Clear).
    * Live KickAssembler binary assembly output (`.byte %xxxxxxxx`) and VIC-II color register setup routines.
 9. **Tape Image Mastering (`.tap`)**: Cassette tape mastering engine (`c64u-bridge tap`). Packages PRGs, compiles assembly, or transpiles Python into bit-accurate `.tap` images with standard KERNAL headers, sync marks, and pilot tones.
-10. **Interactive Textual TUI**: Full-featured terminal IDE (`c64u-bridge tui`) with live Python editor, AST viewer, generated 6502 assembly view, build log, tiered menus, and single-keystroke DMA deployment (`F5`).
+10. **Authentic Commodore 64 Lookalike Screen & 6502 `.asm` Studio (Tkinter)**: Full-screen C64 CRT studio (`c64u-bridge tui`) modeled after `BackMeUpScotty`, featuring the embedded **Pet Me 64** bitmap font by Kreative Korporation, an authentic `LOAD "C64-BRIDGE",8,1` startup sequence with VIC-II raster bars, a full-featured 6502 `.asm` editor (syntax highlighting, line numbers, subroutine/label navigator, comment toggle, find/goto, Full ASM IDE Focus Mode), Python-to-6502 transpiler, D64/TAP/PRG/SID reverse decompiler, and one-touch DMA deployment (`F5`).
 
 ---
 
@@ -238,36 +238,64 @@ c64u-bridge tap examples/rainbow_border.py
 
 ---
 
-## 🕹️ Interactive Textual TUI IDE
+## 🖥️ Commodore 64 Lookalike Screen & 6502 `.asm` Studio (Tkinter)
 
-Launch the interactive terminal IDE:
+Launch the authentic full-screen Commodore 64 Lookalike Studio & 6502 Assembly IDE:
 ```bash
 c64u-bridge tui
+# Or skip the simulated LOAD "C64-BRIDGE",8,1 startup animation:
+c64u-bridge tui --no-boot
 ```
 
-### Keyboard Shortcuts & Toolbar:
-* **Row 1 (`F1–F8`)**:
-  * `F1`: Help & Documentation
+### Authentic C64 CRT Experience & 6502 `.asm` Editor Highlights:
+* **Authentic Startup Sequence**: Starts maximized (`F11` toggles borderless fullscreen) with the classic `**** COMMODORE 64 BASIC V2 ****` banner, automatically types `LOAD "C64-BRIDGE",8,1`, flashes VIC-II fast-loader raster bars across the outer border while displaying brief DMA loading lines, and launches into the studio ready to use.
+* **Embedded Commodore 64 Bitmap Font**: Automatically registers bundled `PetMe64.ttf` (*Pet Me 64*) privately in-process on Windows (no admin install required), with theme switching between **Commodore 64** (classic Light Blue / Dark Blue VIC-II palette) and **C64 Phosphor** (Commodore 1702 green phosphor monitor).
+* **First-Class 6502 `.asm` Editor**:
+  * Real-time 6502/KickAssembler syntax highlighting (opcodes, directives, `$hex`/`%binary` literals, VIC-II/SID/CIA registers, labels, and comments).
+  * Synchronized line number gutter, smart 6502 auto-indent, `Ctrl+/` comment toggle, and `Ctrl+F` Find / Goto Line bar.
+  * **6502 Label & Subroutine Navigator**: Click any label, subroutine, or `.const` in the left outline to jump straight to its definition.
+  * **Full 6502 ASM IDE Focus Mode (`Ctrl+E`)**: Expand the 6502 `.asm` editor + Label Outline across the entire screen for pure assembly coding.
+  * **New `.asm` Starter Template (`Ctrl+N`)**: Instant KickAssembler `BasicUpstart2(start)` + VIC-II raster loop boilerplate.
+
+### Keyboard Shortcuts & 5-Column Command Deck:
+* **Function Keys (`F1–F11`)**:
+  * `F1`: Reference Guide & Full Font/Tool Credits
   * `F2`: Built-in Code Presets (Rainbow Border, Screen Matrix, Hello World, SID Chime)
-  * `F3`: Project File Browser (Navigate `game_dev/`, `examples/`, and root)
-  * `F4`: Refresh C64U Connection & Telemetry
-  * `F5`: One-Touch Transpile, Assemble & DMA Run
+  * `F3`: Project File Browser (`LOAD "$",8` — Navigate `game_dev/`, `examples/`, and root)
+  * `F4`: Refresh / Ping C64U Connection
+  * `F5`: One-Touch Transpile, Assemble & DMA Run on C64U
   * `F6`: Transpile Python to 6502 Assembly
-  * `F7`: Assemble with KickAssembler
-  * `F8`: Reset C64U Machine
-* **Row 2 (`Shift+F1–Shift+F8`)**:
-  * `Shift+F1`: Save Source File
-  * `Shift+F2`: Export to `.tap` Cassette Image
-  * `Shift+F3`: Quick Load PRG via DMA
-  * `Shift+F4`: Pause 6510 CPU
-  * `Shift+F5`: Resume 6510 CPU
-  * `Shift+F6`: Screen Dump ($0400 Screen RAM & $D800 Color RAM)
+  * `F7`: Assemble `.asm` to `.prg` with KickAssembler
+  * `F8`: Soft Reset C64U Machine
+  * `F9`: Reverse-Decompile `.d64`, `.tap`, or `.prg` into editable 6502 `.asm` + Python (with Ethical Use & Copyright Caution notice)
+  * `F10` / `Alt+F/B/C/S/H`: Focus On-Screen 5-Column Menu Deck (Navigate with Arrow Keys)
+  * `F11`: Toggle Borderless Fullscreen C64 Monitor Mode
+* **Shifted Function Keys (`Shift+F1–Shift+F9`) & Editor Shortcuts**:
+  * `Shift+F1` / `Ctrl+S`: Save `.asm` Assembly File
+  * `Shift+F2` / `Ctrl+T`: Master & Export `.tap` Cassette Image
+  * `Shift+F3`: DMA Load `.prg` into C64 RAM without executing
+  * `Shift+F4` / `Shift+F5`: Pause / Resume 6510 CPU
+  * `Shift+F6`: Screen Dump (`$0400` Screen RAM & `$D800` Color RAM)
   * `Shift+F7`: Cold Reboot C64U
-  * `Shift+F8`: Quit TUI
-* **SID Tools**:
-  * `Ctrl+D`: Decompile SID to ASM + Python
-  * `Ctrl+B`: Compile the loaded SID assembly back to `.sid`
-  * `Ctrl+P`: Play the selected/compiled SID on C64U
+  * `Shift+F8` / `Ctrl+Q`: Quit Studio
+  * `Shift+F9` / `Ctrl+M`: Compile & Package 1541 `.d64` Floppy Disk Image
+* **SID Synth Tools**:
+  * `Ctrl+D`: Reverse-Decompile `.sid` to `.asm` + `.py`
+  * `Ctrl+B`: Compile loaded SID source back to `.sid`
+  * `Ctrl+P`: Upload & Play `.sid` on C64U Hardware
+
+---
+
+## 🙏 Credits & Font Attribution
+
+* **Commodore 64 Bitmap Font (`PetMe64.ttf`)**:
+  * Created and produced by **Kreative Korporation / Kreative Software** (Rebecca G. Bettencourt) — <https://www.kreativekorp.com/software/fonts/c64/>
+  * Distributed under the **Kreative Software Relay Fonts Free Use License version 1.2f** (included verbatim at [`src/c64u_bridge/assets/fonts/LICENSE-Kreative-FreeUse-1.2f.txt`](src/c64u_bridge/assets/fonts/LICENSE-Kreative-FreeUse-1.2f.txt)).
+  * Font file and notice were sourced from the **[Faerie](https://github.com/KiwiGeek/Faerie/tree/master/src/Faerie.Terminal.Avalonia/Assets/Fonts)** project's bundled-font collection and shared with the sister **BackMeUpScotty** retro utility project.
+* **Hardware & Cross-Assembler Toolchain**:
+  * **Gideon Zweijtzer** (*Gideon's Logic Architectures*) for the Ultimate-II+, Ultimate 64, and Commodore 64 Ultimate (C64U) FPGA hardware and REST/DMA API.
+  * **Mads Nielsen** for **KickAssembler v5.x**, **Marco Baye** for **ACME**, and the **CC65** development team.
+  * **MOS Technology & Commodore Business Machines (1982)** — Chuck Peddle, Bill Mensch, Al Charpentier, Charles Winterble, and Bob Yannes.
 
 ---
 
