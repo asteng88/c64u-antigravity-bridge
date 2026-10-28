@@ -1,0 +1,512 @@
+<title>IRONFRONT Sprite Bank</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one column of review "bays", each pairing a live animated view with the raw frame strip.
+   Committed single dark theme: the C64 boot-screen blues, so sprites are judged against the machine's own frame. */
+:root {
+  color-scheme: dark;
+  --bg: #1d1747;          /* deep C64 blue */
+  --panel: #262063;
+  --panel-2: #2f2878;
+  --line: #4a3fa0;
+  --fg: #d6d2f5;
+  --muted: #9d96d6;
+  --accent: #b8c76f;      /* C64 yellow, the player faction */
+  --enemy: #9a6759;
+  --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r: 3px;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 14px; line-height: 1.55;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel); }
+.wrap {
+  max-width: 1080px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+header.top { padding-block: 32px 20px; display: grid; gap: 14px; }
+.eyebrow { font-family: var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-size: 12px; }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(34px, 6vw, 56px); line-height: 1; margin: 0; letter-spacing: .04em; text-wrap: balance; }
+h1 span { color: var(--accent); }
+.lede { max-width: 68ch; color: var(--fg); margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1px solid var(--line); border-radius: var(--r); padding: 3px 9px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip b { color: var(--fg); font-weight: 500; }
+
+.controls {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--panel); border-block: 1px solid var(--line);
+}
+.controls .wrap { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; padding-block: 10px; }
+.ctl { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.ctl label { text-transform: uppercase; letter-spacing: .08em; }
+.swatches { display: flex; gap: 2px; flex-wrap: wrap; }
+.sw { width: 18px; height: 18px; border: 1px solid transparent; border-radius: 2px; cursor: pointer; padding: 0; }
+.sw[aria-pressed="true"] { outline: 2px solid var(--fg); outline-offset: 1px; }
+select, button.btn {
+  font: inherit; font-size: 12px; color: var(--fg); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: var(--r); padding: 4px 8px; cursor: pointer;
+}
+button.btn[aria-pressed="true"] { background: var(--accent); color: #1d1747; border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+main { display: grid; gap: 40px; padding-block: 28px 64px; }
+section h2 { font-family: var(--display); font-size: 24px; letter-spacing: .06em; margin: 0 0 4px; text-transform: uppercase; }
+section > .wrap > p.sub { margin: 0 0 16px; color: var(--muted); max-width: 70ch; }
+
+.field-frame { background: #000; padding: 12px; border: 1px solid var(--line); border-radius: var(--r); }
+#field { display: block; width: 100%; max-width: 100%; aspect-ratio: 320 / 200; image-rendering: pixelated; background: #000; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+.bay { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; }
+.bay + .bay { margin-top: 16px; }
+@media (max-width: 760px) { .bay { grid-template-columns: minmax(0, 1fr); } }
+.bay h3 { font-family: var(--display); font-size: 18px; margin: 0; letter-spacing: .05em; text-transform: uppercase; }
+.bay .meta { font-size: 12px; color: var(--muted); margin: 2px 0 12px; }
+.compass { display: grid; grid-template-columns: repeat(3, auto); gap: 6px; justify-content: start; }
+.compass .cell { display: grid; justify-items: center; gap: 2px; font-size: 11px; color: var(--muted); }
+.compass .hub { display: grid; place-items: center; font-family: var(--display); color: var(--muted); font-size: 12px; letter-spacing: .1em; }
+canvas.spr { image-rendering: pixelated; display: block; border-radius: 2px; max-width: 100%; }
+.strip-wrap { min-width: 0; }
+.strip { display: flex; flex-wrap: wrap; gap: 8px; }
+.frame { display: grid; gap: 3px; justify-items: center; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.frame .id { color: var(--fg); }
+.frame .no { opacity: .7; }
+.frame .dot { display: inline-block; width: 8px; height: 8px; border-radius: 1px; vertical-align: -1px; margin-right: 3px; }
+.seqs { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+.seq { display: grid; justify-items: center; gap: 4px; font-size: 12px; color: var(--muted); background: var(--panel-2); border-radius: var(--r); padding: 10px 6px; }
+.seq b { color: var(--fg); font-weight: 500; }
+
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.note { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; min-width: 0; }
+.note h3 { font-family: var(--display); font-size: 16px; letter-spacing: .06em; margin: 0 0 8px; text-transform: uppercase; color: var(--accent); }
+.note ul, .note ol { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.note code { color: var(--accent); }
+.tbl { overflow-x: auto; }
+table { border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; width: 100%; }
+td, th { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 400; text-transform: uppercase; letter-spacing: .06em; font-size: 11px; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<header class="wrap top">
+  <div class="eyebrow">Stage 1 of 3 · Sprite bank review</div>
+  <h1>IRON<span>FRONT</span></h1>
+  <p class="lede">A real-time strategy game for the Commodore 64. Every frame below is the exact cell data the generator writes to <code>sprites.asm</code>, drawn with the C64 palette at true multicolor pixel shape (2:1 wide). Refer to frames by their ID, such as <b>TANK NE-1</b>, when asking for changes.</p>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="controls" aria-label="Preview settings">
+  <div class="wrap">
+    <div class="ctl"><label>Terrain</label><div class="swatches" id="sw-terrain"></div></div>
+    <div class="ctl"><label>Player</label><div class="swatches" id="sw-player"></div></div>
+    <div class="ctl"><label>Enemy</label><div class="swatches" id="sw-enemy"></div></div>
+    <div class="ctl"><label for="mc1">Metal ($D026)</label>
+      <select id="mc1"></select></div>
+    <div class="ctl"><label for="zoom">Zoom</label>
+      <select id="zoom"><option value="2">2×</option><option value="3" selected>3×</option><option value="4">4×</option></select></div>
+    <div class="ctl"><button class="btn" id="shadows" aria-pressed="true" type="button">Shadows on</button></div>
+    <div class="ctl"><button class="btn" id="play" aria-pressed="false" type="button">Pause</button>
+      <select id="speed" aria-label="Animation speed"><option value="0.25">¼ speed</option><option value="0.5">½ speed</option><option value="1" selected>Full speed</option></select></div>
+  </div>
+</div>
+
+<main>
+  <section aria-labelledby="h-field">
+    <div class="wrap">
+      <h2 id="h-field">On the battlefield</h2>
+      <p class="sub">A 320×200 screen at PAL speed (50 frames per second). The player's tank is selected and the cursor is ordering a strike on the enemy tank. Ore crystals and terrain here are placeholders for the character-set work in Stage 3.</p>
+      <div class="field-frame"><canvas id="field" width="320" height="200"></canvas></div>
+      <div class="legend" id="field-legend"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-veh">
+    <div class="wrap">
+      <h2 id="h-veh">Vehicles &amp; aircraft</h2>
+      <p class="sub">Eight headings, two track frames each. N, NE and E are hand-drawn. The other five headings are mirrored or flipped copies, so a fix to a drawn heading carries over to its copies.</p>
+      <div id="vehicles"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-inf">
+    <div class="wrap">
+      <h2 id="h-inf">Rifle squad</h2>
+      <p class="sub">One hardware sprite carries a whole squad. As the squad takes damage it drops from three soldiers to two to one, and the survivors regroup around the same centre point. Every strength has the same 15-frame layout, so the game only swaps the base frame.</p>
+      <div id="infantry"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-fx">
+    <div class="wrap">
+      <h2 id="h-fx">Explosion</h2>
+      <p class="sub">Six frames. The sprite colour changes each frame (white, yellow, orange, red, dark grey) while the shared black and grey carry the smoke.</p>
+      <div id="fx"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-cur">
+    <div class="wrap">
+      <h2 id="h-cur">Cursors &amp; selection</h2>
+      <p class="sub">High-resolution single-colour sprites (24×21 at full pixel width) for crisp edges on top of the multicolor battlefield.</p>
+      <div id="cursors"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-notes">
+    <div class="wrap">
+      <h2 id="h-notes">Hardware notes &amp; open questions</h2>
+      <p class="sub">How the bank is wired up on the VIC-II, and the decisions to settle before Stage 2.</p>
+      <div class="notes">
+        <div class="note">
+          <h3>Colour setup</h3>
+          <ul>
+            <li><code>$D025</code> = 0 black: outlines, track gaps, windows.</li>
+            <li><code>$D026</code> = 1 white: barrels, tracks, cargo, canopies, metal.</li>
+            <li>Sprite colour <code>$D027+n</code> = faction colour, so one bank serves both armies.</li>
+            <li>Cursors are hires sprites. Explosions use a fixed per-frame colour from <code>sprite_colours</code>.</li>
+          </ul>
+        </div>
+        <div class="note">
+          <h3>Memory</h3>
+          <div class="tbl"><table id="mem"></table></div>
+        </div>
+        <div class="note">
+          <h3>Settled in review 1</h3>
+          <ol>
+            <li>Colours: brown ground, yellow player, blue enemy, white metal.</li>
+            <li>Unit scale stays at about 14×16 px for tanks.</li>
+            <li>Squads thin out from 3 to 2 to 1 soldiers.</li>
+            <li>Helicopters added in the side-on style of the reference.</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const D = {"palette":["#000000","#FFFFFF","#68372B","#70A4B2","#6F3D86","#588D43","#352879","#B8C76F","#6F4F25","#433900","#9A6759","#444444","#6C6C6C","#9AD284","#6C5EB5","#959595"],"mc0":0,"mc1":1,"player":7,"enemy":6,"terrain":8,"dirs":["N","NE","E","SE","S","SW","W","NW"],"groups":[{"key":"TANK","title":"Light Tank","base":0,"count":16},{"key":"BUGGY","title":"Recon Buggy","base":16,"count":16},{"key":"HARVESTER","title":"Harvester","base":32,"count":16},{"key":"HELI","title":"Attack Helicopter","base":48,"count":16},{"key":"SHADOW","title":"Helicopter Shadow","base":64,"count":8},{"key":"SQUAD3","title":"Rifle Squad x3","base":72,"count":15},{"key":"SQUAD2","title":"Rifle Squad x2","base":87,"count":15},{"key":"SQUAD1","title":"Rifle Squad x1","base":102,"count":15},{"key":"EXPLOSION","title":"Explosion","base":117,"count":6},{"key":"CURSOR","title":"Cursors","base":123,"count":7}],"sprites":[{"g":"TANK","n":"N-0","m":"mc","c":null,"d":6,"r":["............","......G.....","......G.....","......G.....","...GKKGKKG..","...KFFGFFK..","...GFKGKFG..","...KKFGFKK..","...GKFGFKG..","...KKGFFKK..","...GKFFFKG..","...KFKKKFK..","...GFFFFFG..","...KFGFGFK..","...GFGFGFG..","...KFFFFFK..","...GKKKKKG..","............","............","............","............"]},{"g":"TANK","n":"N-1","m":"mc","c":null,"d":6,"r":["............","......G.....","......G.....","......G.....","...KKKGKKK..","...GFFGFFG..","...KFKGKFK..","...GKFGFKG..","...KKFGFKK..","...GKGFFKG..","...KKFFFKK..","...GFKKKFG..","...KFFFFFK..","...GFGFGFG..","...KFGFGFK..","...GFFFFFG..","...KKKKKKK..","............","............","............","............"]},{"g":"TANK","n":"NE-0","m":"mc","c":null,"d":6,"r":["............","......K.....",".....GFK..G.",".....KFK.G..","....GFFFKG..","....KFFFG...","...GFFFFGK..","...KFKKGFK..","..GFKFFGKFK.","..KFKGFFKFK.",".GFFKFFFKFFG","..KFFKFKFFK.","..KFFKKKFFG.","...KFFFFFK..","...KFGFGFG..","....KFGFK...","....KFFFG...",".....KFK....",".....KKG....","......K.....","............"]},{"g":"TANK","n":"NE-1","m":"mc","c":null,"d":6,"r":["............","......G.....",".....KFK..G.",".....GFK.G..","....KFFFKG..","....GFFFG...","...KFFFFGK..","...GFKKGFK..","..KFKFFGKFK.","..GFKGFFKFK.",".KFFKFFFKFFK","..KFFKFKFFG.","..KFFKKKFFK.","...KFFFFFG..","...KFGFGFK..","....KFGFG...","....KFFFK...",".....KFG....",".....KKK....","......G.....","............"]},{"g":"TANK","n":"E-0","m":"mc","c":null,"d":6,"r":["............","............","............","............","...KGKGKGK..","...KGKGKGK..","...KFFFFFK..","...KFFKKKK..","...KGFKGFK..","...KFFKFFK..","...KGFKFGGGG","...KFFKFGGGG","...KGFKFFK..","...KFFKFFK..","...KFFKKKK..","...KFFFFFK..","...KGKGKGK..","...KGKGKGK..","............","............","............"]},{"g":"TANK","n":"E-1","m":"mc","c":null,"d":6,"r":["............","............","............","............","...GKGKGKG..","...GKGKGKG..","...KFFFFFK..","...KFFKKKK..","...KGFKGFK..","...KFFKFFK..","...KGFKFGGGG","...KFFKFGGGG","...KGFKFFK..","...KFFKFFK..","...KFFKKKK..","...KFFFFFK..","...GKGKGKG..","...GKGKGKG..","............","............","............"]},{"g":"TANK","n":"SE-0","m":"mc","c":null,"d":6,"r":["............","......K.....",".....KKG....",".....KFK....","....KFFFG...","....KFGFK...","...KFGFGFG..","...KFFFFFK..","..KFFKKKFFG.","..KFFKFKFFK.",".GFFKFFFKFFG","..KFKGFFKFK.","..GFKFFGKFK.","...KFKKGFK..","...GFFFFGK..","....KFFFG...","....GFFFKG..",".....KFK.G..",".....GFK..G.","......K.....","............"]},{"g":"TANK","n":"SE-1","m":"mc","c":null,"d":6,"r":["............","......G.....",".....KKK....",".....KFG....","....KFFFK...","....KFGFG...","...KFGFGFK..","...KFFFFFG..","..KFFKKKFFK.","..KFFKFKFFG.",".KFFKFFFKFFK","..GFKGFFKFK.","..KFKFFGKFK.","...GFKKGFK..","...KFFFFGK..","....GFFFG...","....KFFFKG..",".....GFK.G..",".....KFK..G.","......G.....","............"]},{"g":"TANK","n":"S-0","m":"mc","c":null,"d":6,"r":["............","............","............","............","...GKKKKKG..","...KFFFFFK..","...GFGFGFG..","...KFGFGFK..","...GFFFFFG..","...KFKKKFK..","...GKFFFKG..","...KKGFFKK..","...GKFGFKG..","...KKFGFKK..","...GFKGKFG..","...KFFGFFK..","...GKKGKKG..","......G.....","......G.....","......G.....","............"]},{"g":"TANK","n":"S-1","m":"mc","c":null,"d":6,"r":["............","............","............","............","...KKKKKKK..","...GFFFFFG..","...KFGFGFK..","...GFGFGFG..","...KFFFFFK..","...GFKKKFG..","...KKFFFKK..","...GKGFFKG..","...KKFGFKK..","...GKFGFKG..","...KFKGKFK..","...GFFGFFG..","...KKKGKKK..","......G.....","......G.....","......G.....","............"]},{"g":"TANK","n":"SW-0","m":"mc","c":null,"d":6,"r":["............","......K.....",".....GKK....",".....KFK....","....GFFFK...","....KFGFK...","...GFGFGFK..","...KFFFFFK..","..GFFKKKFFK.","..KFFKFKFFK.",".GFFKFFFKFFG","..KFKFFGKFK.","..KFKGFFKFG.","...KFGKKFK..","...KGFFFFG..","....GFFFK...","...GKFFFG...","...G.KFK....","..G..KFG....","......K.....","............"]},{"g":"TANK","n":"SW-1","m":"mc","c":null,"d":6,"r":["............","......G.....",".....KKK....",".....GFK....","....KFFFK...","....GFGFK...","...KFGFGFK..","...GFFFFFK..","..KFFKKKFFK.","..GFFKFKFFK.",".KFFKFFFKFFK","..KFKFFGKFG.","..KFKGFFKFK.","...KFGKKFG..","...KGFFFFK..","....GFFFG...","...GKFFFK...","...G.KFG....","..G..KFK....","......G.....","............"]},{"g":"TANK","n":"W-0","m":"mc","c":null,"d":6,"r":["............","............","............","............","...KGKGKGK..","...KGKGKGK..","...KFFFFFK..","...KKKKFFK..","...KFGKFGK..","...KFFKFFK..",".GGGGFKFGK..",".GGGGFKFFK..","...KFFKFGK..","...KFFKFFK..","...KKKKFFK..","...KFFFFFK..","...KGKGKGK..","...KGKGKGK..","............","............","............"]},{"g":"TANK","n":"W-1","m":"mc","c":null,"d":6,"r":["............","............","............","............","...GKGKGKG..","...GKGKGKG..","...KFFFFFK..","...KKKKFFK..","...KFGKFGK..","...KFFKFFK..",".GGGGFKFGK..",".GGGGFKFFK..","...KFFKFGK..","...KFFKFFK..","...KKKKFFK..","...KFFFFFK..","...GKGKGKG..","...GKGKGKG..","............","............","............"]},{"g":"TANK","n":"NW-0","m":"mc","c":null,"d":6,"r":["............","......K.....","..G..KFG....","...G.KFK....","...GKFFFG...","....GFFFK...","...KGFFFFG..","...KFGKKFK..","..KFKGFFKFG.","..KFKFFGKFK.",".GFFKFFFKFFG","..KFFKFKFFK.","..GFFKKKFFK.","...KFFFFFK..","...GFGFGFK..","....KFGFK...","....GFFFK...",".....KFK....",".....GKK....","......K.....","............"]},{"g":"TANK","n":"NW-1","m":"mc","c":null,"d":6,"r":["............","......G.....","..G..KFK....","...G.KFG....","...GKFFFK...","....GFFFG...","...KGFFFFK..","...KFGKKFG..","..KFKGFFKFK.","..KFKFFGKFG.",".KFFKFFFKFFK","..GFFKFKFFK.","..KFFKKKFFK.","...GFFFFFK..","...KFGFGFK..","....GFGFK...","....KFFFK...",".....GFK....",".....KKK....","......G.....","............"]},{"g":"BUGGY","n":"N-0","m":"mc","c":null,"d":6,"r":["............","............","............","............","......G.....",".....FGF....","...G.FGF.G..","...KFFGFFK..","...GKKGKKG..","....FGGGF...","....FKGKF...","....FFFFF...","...GFFFFFG..","...KFGFGFK..","...GFFFFFG..",".....KKK....","............","............","............","............","............"]},{"g":"BUGGY","n":"N-1","m":"mc","c":null,"d":6,"r":["............","............","............","............","......G.....",".....FGF....","...K.FGF.K..","...GFFGFFG..","...KKKGKKK..","....FGGGF...","....FKGKF...","....FFFFF...","...KFFFFFK..","...GFGFGFG..","...KFFFFFK..",".....KKK....","............","............","............","............","............"]},{"g":"BUGGY","n":"NE-0","m":"mc","c":null,"d":6,"r":["............","............","......G.....",".....KKF....",".....GFK.G..",".....KFFG...","....GFKFG...","....GFKGFK..","...GFGFGFK..","...KKGGKFFK.","..GGFFGFKFG.","..KFFKGFKKK.","...KFFFGFG..","...KGFFGF...","....KGFFF...","....KFGF....",".....KFG....",".....KKK....","......G.....","............","............"]},{"g":"BUGGY","n":"NE-1","m":"mc","c":null,"d":6,"r":["............","............","......K.....",".....GGF....",".....KFK.G..",".....KFFG...","....GFKFG...","....GFKGFK..","...KFGFGFK..","...GKGGKFFK.","..KKFFGFKFK.","..KFFKGFKGG.","...KFFFGFK..","...KGFFGF...","....KGFFF...","....KFGF....",".....KFK....",".....KGG....","......K.....","............","............"]},{"g":"BUGGY","n":"E-0","m":"mc","c":null,"d":6,"r":["............","............","............","............",".....KG.GK..",".....KG.GK..","....KFFFKF..","....KGKGKF..","....KFKGKF..","....KFFGKF..","....KFGGGGGG","....KFGGGGGG","....KFFGKF..","....KFKGKF..","....KGKGKF..","....KFFFKF..",".....KG.GK..",".....KG.GK..","............","............","............"]},{"g":"BUGGY","n":"E-1","m":"mc","c":null,"d":6,"r":["............","............","............","............",".....GK.KG..",".....GK.KG..","....KFFFKF..","....KGKGKF..","....KFKGKF..","....KFFGKF..","....KFGGGGGG","....KFGGGGGG","....KFFGKF..","....KFKGKF..","....KGKGKF..","....KFFFKF..",".....GK.KG..",".....GK.KG..","............","............","............"]},{"g":"BUGGY","n":"SE-0","m":"mc","c":null,"d":6,"r":["............","............","......G.....",".....KKK....",".....KFG....","....KFGF....","....KGFFF...","...KGFFGF...","...KFFFGFG..","..KFFKGFKKK.","..GGFFGFKFG.","...KKGGKFFK.","...GFGFGFK..","....GFKGFK..","....GFKFG...",".....KFFG...",".....GFK.G..",".....KKF....","......G.....","............","............"]},{"g":"BUGGY","n":"SE-1","m":"mc","c":null,"d":6,"r":["............","............","......K.....",".....KGG....",".....KFK....","....KFGF....","....KGFFF...","...KGFFGF...","...KFFFGFK..","..KFFKGFKGG.","..KKFFGFKFK.","...GKGGKFFK.","...KFGFGFK..","....GFKGFK..","....GFKFG...",".....KFFG...",".....KFK.G..",".....GGF....","......K.....","............","............"]},{"g":"BUGGY","n":"S-0","m":"mc","c":null,"d":6,"r":["............","............","............","............","............",".....KKK....","...GFFFFFG..","...KFGFGFK..","...GFFFFFG..","....FFFFF...","....FKGKF...","....FGGGF...","...GKKGKKG..","...KFFGFFK..","...G.FGF.G..",".....FGF....","......G.....","............","............","............","............"]},{"g":"BUGGY","n":"S-1","m":"mc","c":null,"d":6,"r":["............","............","............","............","............",".....KKK....","...KFFFFFK..","...GFGFGFG..","...KFFFFFK..","....FFFFF...","....FKGKF...","....FGGGF...","...KKKGKKK..","...GFFGFFG..","...K.FGF.K..",".....FGF....","......G.....","............","............","............","............"]},{"g":"BUGGY","n":"SW-0","m":"mc","c":null,"d":6,"r":["............","............","......G.....",".....KKK....",".....GFK....",".....FGFK...","....FFFGK...","....FGFFGK..","...GFGFFFK..","..KKKFGKFFK.","..GFKFGFFGG.","..KFFKGGKK..","...KFGFGFG..","...KFGKFG...","....GFKFG...","....GFFK....","...G.KFG....",".....FKK....","......G.....","............","............"]},{"g":"BUGGY","n":"SW-1","m":"mc","c":null,"d":6,"r":["............","............","......K.....",".....GGK....",".....KFK....",".....FGFK...","....FFFGK...","....FGFFGK..","...KFGFFFK..","..GGKFGKFFK.","..KFKFGFFKK.","..KFFKGGKG..","...KFGFGFK..","...KFGKFG...","....GFKFG...","....GFFK....","...G.KFK....",".....FGG....","......K.....","............","............"]},{"g":"BUGGY","n":"W-0","m":"mc","c":null,"d":6,"r":["............","............","............","............","...KG.GK....","...KG.GK....","...FKFFFK...","...FKGKGK...","...FKGKFK...","...FKGFFK...",".GGGGGGFK...",".GGGGGGFK...","...FKGFFK...","...FKGKFK...","...FKGKGK...","...FKFFFK...","...KG.GK....","...KG.GK....","............","............","............"]},{"g":"BUGGY","n":"W-1","m":"mc","c":null,"d":6,"r":["............","............","............","............","...GK.KG....","...GK.KG....","...FKFFFK...","...FKGKGK...","...FKGKFK...","...FKGFFK...",".GGGGGGFK...",".GGGGGGFK...","...FKGFFK...","...FKGKFK...","...FKGKGK...","...FKFFFK...","...GK.KG....","...GK.KG....","............","............","............"]},{"g":"BUGGY","n":"NW-0","m":"mc","c":null,"d":6,"r":["............","............","......G.....",".....FKK....","...G.KFG....","....GFFK....","....GFKFG...","...KFGKFG...","...KFGFGFG..","..KFFKGGKK..","..GFKFGFFGG.","..KKKFGKFFK.","...GFGFFFK..","....FGFFGK..","....FFFGK...",".....FGFK...",".....GFK....",".....KKK....","......G.....","............","............"]},{"g":"BUGGY","n":"NW-1","m":"mc","c":null,"d":6,"r":["............","............","......K.....",".....FGG....","...G.KFK....","....GFFK....","....GFKFG...","...KFGKFG...","...KFGFGFK..","..KFFKGGKG..","..KFKFGFFKK.","..GGKFGKFFK.","...KFGFFFK..","....FGFFGK..","....FFFGK...",".....FGFK...",".....KFK....",".....GGK....","......K.....","............","............"]},{"g":"HARVESTER","n":"N-0","m":"mc","c":null,"d":6,"r":["............","..GKGKGKGKG.","..KKKKKKKKK.","...K.....K..","..GKFFFFFKG.","..KFGGGKKFK.","..GFGKGFFFG.","..KFGGGFFFK.","..GFGGGKKKG.","..KFKGKFFFK.","..GFGGGFGFG.","..KFGGGFFFK.","..GFGKGFGFG.","..KFGGGFFFK.","..GFGGGFGFG.","..KFKGKFFFK.","..GFGGGFFFG.","..KFFFFFFFK.","..GKKKKKKKG.","............","............"]},{"g":"HARVESTER","n":"N-1","m":"mc","c":null,"d":6,"r":["............","..KGKGKGKGK.","..KKKKKKKKK.","...K.....K..","..KKFFFFFKK.","..GFGGGKKFG.","..KFGKGFFFK.","..GFGGGFFFG.","..KFGGGKKKK.","..GFKGKFFFG.","..KFGGGFGFK.","..GFGGGFFFG.","..KFGKGFGFK.","..GFGGGFFFG.","..KFGGGFGFK.","..GFKGKFFFG.","..KFGGGFFFK.","..GFFFFFFFG.","..KKKKKKKKK.","............","............"]},{"g":"HARVESTER","n":"NE-0","m":"mc","c":null,"d":6,"r":["............","......KK....",".......G....",".....KFKK...",".....GFKG...","....KFFFKK..","....GFGG.G..","...KFFGGFKK.","...GFGKGG.G.","..KFFGGGFKKK","..GFGGGGFKKG","..KFGKGFKFKK","...KGGGFKFG.","...KGGFFFKK.","....KGFFFG..","....KFFFFK..",".....KFFG...",".....KFFK...","......KG....",".......K....","............"]},{"g":"HARVESTER","n":"NE-1","m":"mc","c":null,"d":6,"r":["............","......GG....",".......K....",".....GFGG...",".....KFKK...","....GFFFGG..","....KFGG.K..","...GFFGGFGG.","...KFGKGG.K.","..GFFGGGFKGG","..KFGGGGFKKK","..KFGKGFKFKG","...KGGGFKFK.","...KGGFFFKG.","....KGFFFK..","....KFFFFG..",".....KFFK...",".....KFFG...","......KK....",".......G....","............"]},{"g":"HARVESTER","n":"E-0","m":"mc","c":null,"d":6,"r":["............","..GKGKGKGK..","..GKGKGKGK..","..KFFFFFFFKK","..KFFFFFFFKG","..KFGGGGGF.K","..KFGKGKGF.G","..KFGGGGGF.K","..KFGGGGGF.G","..KFGKGKGF.K","..KFGGGGGF.G","..KFFFFFKF.K","..KFGFGFKK.G","..KFFFFFKK.K","..KFGFGFKF.G","..KFFFFFFFKK","..KFFFFFFFKG","..GKGKGKGK..","..GKGKGKGK..","............","............"]},{"g":"HARVESTER","n":"E-1","m":"mc","c":null,"d":6,"r":["............","..KGKGKGKG..","..KGKGKGKG..","..KFFFFFFFKG","..KFFFFFFFKK","..KFGGGGGF.G","..KFGKGKGF.K","..KFGGGGGF.G","..KFGGGGGF.K","..KFGKGKGF.G","..KFGGGGGF.K","..KFFFFFKF.G","..KFGFGFKK.K","..KFFFFFKK.G","..KFGFGFKF.K","..KFFFFFFFKG","..KFFFFFFFKK","..KGKGKGKG..","..KGKGKGKG..","............","............"]},{"g":"HARVESTER","n":"SE-0","m":"mc","c":null,"d":6,"r":["............",".......K....","......KG....",".....KFFK...",".....KFFG...","....KFFFFK..","....KGFFFG..","...KGGFFFKK.","...KGGGFKFG.","..KFGKGFKFKK","..GFGGGGFKKG","..KFFGGGFKKK","...GFGKGG.G.","...KFFGGFKK.","....GFGG.G..","....KFFFKK..",".....GFKG...",".....KFKK...",".......G....","......KK....","............"]},{"g":"HARVESTER","n":"SE-1","m":"mc","c":null,"d":6,"r":["............",".......G....","......KK....",".....KFFG...",".....KFFK...","....KFFFFG..","....KGFFFK..","...KGGFFFKG.","...KGGGFKFK.","..KFGKGFKFKG","..KFGGGGFKKK","..GFFGGGFKGG","...KFGKGG.K.","...GFFGGFGG.","....KFGG.K..","....GFFFGG..",".....KFKK...",".....GFGG...",".......K....","......GG....","............"]},{"g":"HARVESTER","n":"S-0","m":"mc","c":null,"d":6,"r":["............","............","..GKKKKKKKG.","..KFFFFFFFK.","..GFGGGFFFG.","..KFKGKFFFK.","..GFGGGFGFG.","..KFGGGFFFK.","..GFGKGFGFG.","..KFGGGFFFK.","..GFGGGFGFG.","..KFKGKFFFK.","..GFGGGKKKG.","..KFGGGFFFK.","..GFGKGFFFG.","..KFGGGKKFK.","..GKFFFFFKG.","...K.....K..","..KKKKKKKKK.","..GKGKGKGKG.","............"]},{"g":"HARVESTER","n":"S-1","m":"mc","c":null,"d":6,"r":["............","............","..KKKKKKKKK.","..GFFFFFFFG.","..KFGGGFFFK.","..GFKGKFFFG.","..KFGGGFGFK.","..GFGGGFFFG.","..KFGKGFGFK.","..GFGGGFFFG.","..KFGGGFGFK.","..GFKGKFFFG.","..KFGGGKKKK.","..GFGGGFFFG.","..KFGKGFFFK.","..GFGGGKKFG.","..KKFFFFFKK.","...K.....K..","..KKKKKKKKK.","..KGKGKGKGK.","............"]},{"g":"HARVESTER","n":"SW-0","m":"mc","c":null,"d":6,"r":["............",".....K......",".....GK.....","....KFFK....","....GFFK....","...KFFFFK...","...GFFFGK...","..KKFFFGGK..","..GFKFGGGK..",".KKFKFGKGFK.",".GKKFGGGGFG.",".KKKFGGGFFK.","..G.GGKGFG..","..KKFGGFFK..","...G.GGFG...","...KKFFFK...","....GKFG....","....KKFK....",".....G......",".....KK.....","............"]},{"g":"HARVESTER","n":"SW-1","m":"mc","c":null,"d":6,"r":["............",".....G......",".....KK.....","....GFFK....","....KFFK....","...GFFFFK...","...KFFFGK...","..GKFFFGGK..","..KFKFGGGK..",".GKFKFGKGFK.",".KKKFGGGGFK.",".GGKFGGGFFG.","..K.GGKGFK..","..GGFGGFFG..","...K.GGFK...","...GGFFFG...","....KKFK....","....GGFG....",".....K......",".....GG.....","............"]},{"g":"HARVESTER","n":"W-0","m":"mc","c":null,"d":6,"r":["............","...KGKGKGKG.","...KGKGKGKG.",".KKFFFFFFFK.",".GKFFFFFFFK.",".K.FGGGGGFK.",".G.FGKGKGFK.",".K.FGGGGGFK.",".G.FGGGGGFK.",".K.FGKGKGFK.",".G.FGGGGGFK.",".K.FKFFFFFK.",".G.KKFGFGFK.",".K.KKFFFFFK.",".G.FKFGFGFK.",".KKFFFFFFFK.",".GKFFFFFFFK.","...KGKGKGKG.","...KGKGKGKG.","............","............"]},{"g":"HARVESTER","n":"W-1","m":"mc","c":null,"d":6,"r":["............","...GKGKGKGK.","...GKGKGKGK.",".GKFFFFFFFK.",".KKFFFFFFFK.",".G.FGGGGGFK.",".K.FGKGKGFK.",".G.FGGGGGFK.",".K.FGGGGGFK.",".G.FGKGKGFK.",".K.FGGGGGFK.",".G.FKFFFFFK.",".K.KKFGFGFK.",".G.KKFFFFFK.",".K.FKFGFGFK.",".GKFFFFFFFK.",".KKFFFFFFFK.","...GKGKGKGK.","...GKGKGKGK.","............","............"]},{"g":"HARVESTER","n":"NW-0","m":"mc","c":null,"d":6,"r":["............",".....KK.....",".....G......","....KKFK....","....GKFG....","...KKFFFK...","...G.GGFG...","..KKFGGFFK..","..G.GGKGFG..",".KKKFGGGFFK.",".GKKFGGGGFG.",".KKFKFGKGFK.","..GFKFGGGK..","..KKFFFGGK..","...GFFFGK...","...KFFFFK...","....GFFK....","....KFFK....",".....GK.....",".....K......","............"]},{"g":"HARVESTER","n":"NW-1","m":"mc","c":null,"d":6,"r":["............",".....GG.....",".....K......","....GGFG....","....KKFK....","...GGFFFG...","...K.GGFK...","..GGFGGFFG..","..K.GGKGFK..",".GGKFGGGFFG.",".KKKFGGGGFK.",".GKFKFGKGFK.","..KFKFGGGK..","..GKFFFGGK..","...KFFFGK...","...GFFFFK...","....KFFK....","....GFFK....",".....KK.....",".....G......","............"]},{"g":"HELI","n":"N-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","......K.....",".....KFK....","....KFFFK...","...KKFFFKK..",".KFKFFFFFKFK",".KGKFFKFFKGK","...KKFFFKK..","..KKK.F.KKK.","......F.....",".....KKK....","......K.....","............","............","............","............","............"]},{"g":"HELI","n":"N-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","......K.....",".....KFK....","....KFFFK...","...KKFFFKK..",".KFKFFFFFKFK",".KGKFFKFFKGK","...KKFFFKK..","..KKK.F.KKK.","......F.....",".....GKG....","......K.....","............","............","............","............","............"]},{"g":"HELI","n":"NE-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","......K.....",".....KFFK...","....KFFFGK..","....KFFFFK..","...KFFFFFK..","..KFKKFFKK..",".KFK.K..K...","KFK..KKKKK..","GGG.........",".K..........","............","............","............","............","............","............"]},{"g":"HELI","n":"NE-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","......K.....",".....KFFK...","....KFFFGK..","....KFFFFK..","...KFFFFFK..","..KFKKFFKK..",".KFK.K..K...","GFK..KKKKK..","KGK.........",".G..........","............","............","............","............","............","............"]},{"g":"HELI","n":"E-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","K.....K.....","K....KFFK...","GGK.KFFFFGK.","KFFKFFFFFGGK","G.KKFFFFKFGK","....KFFFFFFK","....KKGGKKKK","....K....K..","...KKKKKKKK.","............","............","............","............","............","............","............"]},{"g":"HELI","n":"E-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","K.....K.....","G....KFFK...","KGK.KFFFFGK.","KFFKFFFFFGGK","K.KKFFFFKFGK","....KFFFFFFK","....KKGGKKKK","....K....K..","...KKKKKKKK.","............","............","............","............","............","............","............"]},{"g":"HELI","n":"SE-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","G.....K.....","KK...KFK....","GGFFKFFFK...",".K.KFFFFGK..","....KFFFGGK.","...KFKFFGGGK","...KGKKFFFK.","....KK.KKK..",".....K...K..","....KKKKKKK.","............","............","............","............","............","............"]},{"g":"HELI","n":"SE-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","K.....K.....","GK...KFK....","KGFFKFFFK...",".K.KFFFFGK..","....KFFFGGK.","...KFKFFGGGK","...KGKKFFFK.","....KK.KKK..",".....K...K..","....KKKKKKK.","............","............","............","............","............","............"]},{"g":"HELI","n":"S-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","......K.....",".....KFK....","....KGFGK...","...KKGFGKK..",".KFKFFFFFKFK",".KGKFFFFFKGK","...KKFFFKK..","....K.K.K...","..KKK...KKK.","............","............","............","............","............","............","............"]},{"g":"HELI","n":"S-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","......K.....",".....KFK....","....KGFGK...","...KKGFGKK..",".KFKFFFFFKFK",".KGKFFFFFKGK","...KKFFFKK..","....K.K.K...","..KKK...KKK.","............","............","............","............","............","............","............"]},{"g":"HELI","n":"SW-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","......K.....",".....KFK...K","....KFFFKFFG","...KGFFFFK.K","..KGGFFFK...",".KGGGFFKFK..","..KFFFKKGK..","...KKK.KK...","...K...K....","..KKKKKKK...","............","............","............","............","............","............"]},{"g":"HELI","n":"SW-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","......K.....",".....KFK...K","....KFFFKFFG","...KGFFFFK.K","..KGGFFFK...",".KGGGFFKFK..","..KFFFKKGK..","...KKK.KK...","...K...K....","..KKKKKKK...","............","............","............","............","............","............"]},{"g":"HELI","n":"W-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","......K.....","....KFFK....","..KGFFFFK.KG",".KGGFFFFFKFF",".KGFKFFFFKK.",".KFFFFFFK...",".KKKKGGKK...","...K....K...","..KKKKKKKK..","............","............","............","............","............","............","............"]},{"g":"HELI","n":"W-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","......K.....","....KFFK....","..KGFFFFK.KG",".KGGFFFFFKFF",".KGFKFFFFKK.",".KFFFFFFK...",".KKKKGGKK...","...K....K...","..KKKKKKKK..","............","............","............","............","............","............","............"]},{"g":"HELI","n":"NW-0","m":"mc","c":null,"d":2,"r":["............","............","............","............",".KKKKKGKKKKK","......K.....","....KFFK....","...KGFFFK...","...KFFFFK...","...KFFFFFK..","...KKFFKKFK.","....K..K.KFK","...KKKKK..KF","..........GG","...........K","............","............","............","............","............","............"]},{"g":"HELI","n":"NW-1","m":"mc","c":null,"d":2,"r":["............","............","............","............","....KKGKK...","......K.....","....KFFK....","...KGFFFK...","...KFFFFK...","...KFFFFFK..","...KKFFKKFK.","....K..K.KFK","...KKKKK..KF","..........KG","...........G","............","............","............","............","............","............"]},{"g":"SHADOW","n":"N","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".............#..........","..........#.#.#.........",".........#.#.#.#.#......","......#.#.#.#.#.#.#.....","...#.#.#.#.#.#.#.#.#.#.#","..#.#.#.#.#.#.#.#.#.#.#.",".......#.#.#.#.#.#.#....","....#.#.#...#...#.#.#...",".............#..........","..........#.#.#.........",".............#..........","........................","........................","........................","........................","........................"]},{"g":"SHADOW","n":"NE","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".............#..........","..........#.#.#.#.......",".........#.#.#.#.#.#....","........#.#.#.#.#.#.....",".......#.#.#.#.#.#.#....","....#.#.#.#.#.#.#.#.....","...#.#.#...#.....#......","#.#.#.....#.#.#.#.#.....",".#.#.#..................","..#.....................","........................","........................","........................","........................","........................","........................"]},{"g":"SHADOW","n":"E","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".#...........#..........","#.........#.#.#.#.......",".#.#.#...#.#.#.#.#.#.#..","#.#.#.#.#.#.#.#.#.#.#.#.",".#...#.#.#.#.#.#.#.#.#.#","........#.#.#.#.#.#.#.#.",".........#.#.#.#.#.#.#.#","........#.........#.....",".......#.#.#.#.#.#.#.#..","........................","........................","........................","........................","........................","........................","........................"]},{"g":"SHADOW","n":"SE","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".#...........#..........","#.#.......#.#.#.........",".#.#.#.#.#.#.#.#.#......","..#...#.#.#.#.#.#.#.....",".........#.#.#.#.#.#.#..","......#.#.#.#.#.#.#.#.#.",".......#.#.#.#.#.#.#.#..","........#.#...#.#.#.....","...........#.......#....","........#.#.#.#.#.#.#...","........................","........................","........................","........................","........................","........................"]},{"g":"SHADOW","n":"S","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".............#..........","..........#.#.#.........",".........#.#.#.#.#......","......#.#.#.#.#.#.#.....","...#.#.#.#.#.#.#.#.#.#.#","..#.#.#.#.#.#.#.#.#.#.#.",".......#.#.#.#.#.#.#....","........#...#...#.......",".....#.#.#.......#.#.#..","........................","........................","........................","........................","........................","........................","........................"]},{"g":"SHADOW","n":"SW","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".............#..........","..........#.#.#.......#.",".........#.#.#.#.#.#.#.#","......#.#.#.#.#.#.#...#.",".....#.#.#.#.#.#.#......","..#.#.#.#.#.#.#.#.#.....",".....#.#.#.#.#.#.#.#....","......#.#.#...#.#.......",".......#.......#........","....#.#.#.#.#.#.#.......","........................","........................","........................","........................","........................","........................"]},{"g":"SHADOW","n":"W","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".............#..........","........#.#.#.#.........",".....#.#.#.#.#.#.#...#.#","..#.#.#.#.#.#.#.#.#.#.#.","...#.#.#.#.#.#.#.#.#.#..","..#.#.#.#.#.#.#.#.......","...#.#.#.#.#.#.#.#......","......#.........#.......",".....#.#.#.#.#.#.#.#....","........................","........................","........................","........................","........................","........................","........................"]},{"g":"SHADOW","n":"NW","m":"hr","c":0,"d":8,"r":["........................","........................","........................","........................","........................",".............#..........","........#.#.#.#.........",".......#.#.#.#.#.#......","......#.#.#.#.#.#.......",".......#.#.#.#.#.#.#....","......#.#.#.#.#.#.#.#...",".........#.....#...#.#.#","......#.#.#.#.#.....#.#.",".....................#.#","......................#.","........................","........................","........................","........................","........................","........................"]},{"g":"SQUAD3","n":"WALK-N-0","m":"mc","c":null,"d":8,"r":["............","............","......F.....","......F.....",".....FFF....",".....FGF....","......F.....","......K.....",".....K.K....",".....K.K....","........F...","..F.....F...","..F....FFF..",".FFF...FGF..",".FGF....F...","..F.....K...","..K....K.K..","..K....K.K..","..K.........","............","............"]},{"g":"SQUAD3","n":"WALK-N-1","m":"mc","c":null,"d":8,"r":["............","............","......F.....","......F.....",".....FFF....",".....FGF....","......F.....","......K.....","......K.....","......K.....","........F...","..F.....F...","..F....FFF..",".FFF...FGF..",".FGF....F...","..F.....K...","..K.....K...",".K.K....K...",".K.K........","............","............"]},{"g":"SQUAD3","n":"WALK-E-0","m":"mc","c":null,"d":8,"r":["............","............","......F.....","......FK....",".....FFF....","......FGG...","......F.....","......KK....",".....K..K...",".....K..K...","........F...","..F.....FK..","..FK...FFF..",".FFF....FGG.","..FGG...F...","..F.....KK..","..K....K..K.","..K....K..K.","..KK........","............","............"]},{"g":"SQUAD3","n":"WALK-E-1","m":"mc","c":null,"d":8,"r":["............","............","......F.....","......FK....",".....FFF....","......FGG...","......F.....","......K.....","......K.....","......KK....","........F...","..F.....FK..","..FK...FFF..",".FFF....FGG.","..FGG...F...","..F.....K...","..KK....K...",".K..K...KK..",".K..K.......","............","............"]},{"g":"SQUAD3","n":"WALK-S-0","m":"mc","c":null,"d":8,"r":["............","............","......F.....","......K.....",".....FFF....",".....FGF....","......F.....","......K.....",".....K.K....",".....K.K....","........F...","..F.....K...","..K....FFF..",".FFF...FGF..",".FGF....F...","..F.....K...","..K....K.K..","..K....K.K..","..K.........","............","............"]},{"g":"SQUAD3","n":"WALK-S-1","m":"mc","c":null,"d":8,"r":["............","............","......F.....","......K.....",".....FFF....",".....FGF....","......F.....","......K.....","......K.....","......K.....","........F...","..F.....K...","..K....FFF..",".FFF...FGF..",".FGF....F...","..F.....K...","..K.....K...",".K.K....K...",".K.K........","............","............"]},{"g":"SQUAD3","n":"WALK-W-0","m":"mc","c":null,"d":8,"r":["............","............",".....F......","....KF......","....FFF.....","...GGF......",".....F......","....KK......","...K..K.....","...K..K.....","...F........","..KF.....F..","..FFF...KF..",".GGF....FFF.","...F...GGF..","..KK.....F..",".K..K....K..",".K..K....K..","........KK..","............","............"]},{"g":"SQUAD3","n":"WALK-W-1","m":"mc","c":null,"d":8,"r":["............","............",".....F......","....KF......","....FFF.....","...GGF......",".....F......",".....K......",".....K......","....KK......","...F........","..KF.....F..","..FFF...KF..",".GGF....FFF.","...F...GGF..","...K.....F..","...K....KK..","..KK...K..K.",".......K..K.","............","............"]},{"g":"SQUAD3","n":"FIRE-E-0","m":"mc","c":null,"d":5,"r":["............","............","......F.....","......FK....",".....FFF.G..","......FGGG..","......F..G..","......K.....",".....K.K....",".....K.K....","........F...","..F.....FK..","..FK...FFF.G",".FFF....FGGG","..FGG...F..G","..F.....K...","..K....K.K..",".K.K...K.K..",".K.K........","............","............"]},{"g":"SQUAD3","n":"FIRE-E-1","m":"mc","c":null,"d":5,"r":["............","............","......F.....","......FK....",".....FFF....","......FGG...","......F.....","......K.....",".....K.K....",".....K.K....","........F...","..F.....FK..","..FK...FFF..",".FFF.G..FGG.","..FGGG..F...","..F..G..K...","..K....K.K..",".K.K...K.K..",".K.K........","............","............"]},{"g":"SQUAD3","n":"FIRE-W-0","m":"mc","c":null,"d":5,"r":["............","............",".....F......","....KF......","..G.FFF.....","..GGGF......","..G..F......",".....K......","....K.K.....","....K.K.....","...F........","..KF.....F..","G.FFF...KF..","GGGF....FFF.","G..F...GGF..","...K.....F..","..K.K....K..","..K.K...K.K.","........K.K.","............","............"]},{"g":"SQUAD3","n":"FIRE-W-1","m":"mc","c":null,"d":5,"r":["............","............",".....F......","....KF......","....FFF.....","...GGF......",".....F......",".....K......","....K.K.....","....K.K.....","...F........","..KF.....F..","..FFF...KF..",".GGF..G.FFF.","...F..GGGF..","...K..G..F..","..K.K....K..","..K.K...K.K.","........K.K.","............","............"]},{"g":"SQUAD3","n":"DIE-0","m":"mc","c":null,"d":10,"r":["............","............","............","......F.....",".....FKF....","......FF....","......F.....","......K.....",".....K.K....",".....K.K....","............","........F...",".......FKF..","........FF..","..F.....F...",".FFK....K...","..FF...K.K..","..KK...K.K..",".K.K........","............","............"]},{"g":"SQUAD3","n":"DIE-1","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","......F.....",".....FFK....","......FF....","......KK....",".....K.K....","............","............","............","........F...",".......FFK..","........FF..","........KK..",".KFFF..K.K..","..KGK.......","............","............"]},{"g":"SQUAD3","n":"DIE-2","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","............","............","............",".....KFFF...","......KGK...","............","............","............","............","............","............",".......KFFF.",".KFFF...KGK.","..KGK.......","............","............"]},{"g":"SQUAD2","n":"WALK-N-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","...F........","...F........","..FFF.......","..FGF.......","...F...F....","...K...F....","..K.K.FFF...","..K.K.FGF...",".......F....",".......K....",".......K....",".......K....","............","............","............","............"]},{"g":"SQUAD2","n":"WALK-N-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","...F........","...F........","..FFF.......","..FGF.......","...F...F....","...K...F....","...K..FFF...","...K..FGF...",".......F....",".......K....","......K.K...","......K.K...","............","............","............","............"]},{"g":"SQUAD2","n":"WALK-E-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","...F........","...FK.......","..FFF.......","...FGG......","...F...F....","...KK..FK...","..K..KFFF...","..K..K.FGG..",".......F....",".......K....",".......K....",".......KK...","............","............","............","............"]},{"g":"SQUAD2","n":"WALK-E-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","...F........","...FK.......","..FFF.......","...FGG......","...F...F....","...K...FK...","...K..FFF...","...KK..FGG..",".......F....",".......KK...","......K..K..","......K..K..","............","............","............","............"]},{"g":"SQUAD2","n":"WALK-S-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","...F........","...K........","..FFF.......","..FGF.......","...F...F....","...K...K....","..K.K.FFF...","..K.K.FGF...",".......F....",".......K....",".......K....",".......K....","............","............","............","............"]},{"g":"SQUAD2","n":"WALK-S-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","...F........","...K........","..FFF.......","..FGF.......","...F...F....","...K...K....","...K..FFF...","...K..FGF...",".......F....",".......K....","......K.K...","......K.K...","............","............","............","............"]},{"g":"SQUAD2","n":"WALK-W-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","........F...",".......KF...",".......FFF..","......GGF...","....F...F...","...KF..KK...","...FFFK..K..","..GGF.K..K..","....F.......","....K.......","....K.......","...KK.......","............","............","............","............"]},{"g":"SQUAD2","n":"WALK-W-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","........F...",".......KF...",".......FFF..","......GGF...","....F...F...","...KF...K...","...FFF..K...","..GGF..KK...","....F.......","...KK.......","..K..K......","..K..K......","............","............","............","............"]},{"g":"SQUAD2","n":"FIRE-E-0","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","...F........","...FK.......","..FFF.G.....","...FGGG.....","...F..GF....","...K...FK...","..K.K.FFF...","..K.K..FGG..",".......F....",".......K....","......K.K...","......K.K...","............","............","............","............"]},{"g":"SQUAD2","n":"FIRE-E-1","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","...F........","...FK.......","..FFF.......","...FGG......","...F...F....","...K...FK...","..K.K.FFF.G.","..K.K..FGGG.",".......F..G.",".......K....","......K.K...","......K.K...","............","............","............","............"]},{"g":"SQUAD2","n":"FIRE-W-0","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","........F...",".......KF...",".....G.FFF..",".....GGGF...","....FG..F...","...KF...K...","...FFF.K.K..","..GGF..K.K..","....F.......","....K.......","...K.K......","...K.K......","............","............","............","............"]},{"g":"SQUAD2","n":"FIRE-W-1","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","........F...",".......KF...",".......FFF..","......GGF...","....F...F...","...KF...K...",".G.FFF.K.K..",".GGGF..K.K..",".G..F.......","....K.......","...K.K......","...K.K......","............","............","............","............"]},{"g":"SQUAD2","n":"DIE-0","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","............","...F........","..FKF.......","...FF.......","...F........","...K........","..K.K.......","..K.K..F....","......FFK...",".......FF...",".......KK...","......K.K...","............","............","............","............"]},{"g":"SQUAD2","n":"DIE-1","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","............","............","............","...F........","..FFK.......","...FF.......","...KK.......","..K.K.......","............","............","......KFFF..",".......KGK..","............","............","............","............"]},{"g":"SQUAD2","n":"DIE-2","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","............","............","............","............","............","............","..KFFF......","...KGK......","............","............","......KFFF..",".......KGK..","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-N-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............","......F.....","......F.....",".....FFF....",".....FGF....","......F.....","......K.....",".....K.K....",".....K.K....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-N-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............","......F.....","......F.....",".....FFF....",".....FGF....","......F.....","......K.....","......K.....","......K.....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-E-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............","......F.....","......FK....",".....FFF....","......FGG...","......F.....","......KK....",".....K..K...",".....K..K...","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-E-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............","......F.....","......FK....",".....FFF....","......FGG...","......F.....","......K.....","......K.....","......KK....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-S-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............","......F.....","......K.....",".....FFF....",".....FGF....","......F.....","......K.....",".....K.K....",".....K.K....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-S-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............","......F.....","......K.....",".....FFF....",".....FGF....","......F.....","......K.....","......K.....","......K.....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-W-0","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............",".....F......","....KF......","....FFF.....","...GGF......",".....F......","....KK......","...K..K.....","...K..K.....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"WALK-W-1","m":"mc","c":null,"d":8,"r":["............","............","............","............","............","............",".....F......","....KF......","....FFF.....","...GGF......",".....F......",".....K......",".....K......","....KK......","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"FIRE-E-0","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","............","......F.....","......FK....",".....FFF.G..","......FGGG..","......F..G..","......K.....",".....K.K....",".....K.K....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"FIRE-E-1","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","............","......F.....","......FK....",".....FFF....","......FGG...","......F.....","......K.....",".....K.K....",".....K.K....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"FIRE-W-0","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","............",".....F......","....KF......","..G.FFF.....","..GGGF......","..G..F......",".....K......","....K.K.....","....K.K.....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"FIRE-W-1","m":"mc","c":null,"d":5,"r":["............","............","............","............","............","............",".....F......","....KF......","....FFF.....","...GGF......",".....F......",".....K......","....K.K.....","....K.K.....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"DIE-0","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","............","............","......F.....",".....FKF....","......FF....","......F.....","......K.....",".....K.K....",".....K.K....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"DIE-1","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","............","............","............","............","......F.....",".....FFK....","......FF....","......KK....",".....K.K....","............","............","............","............","............","............","............"]},{"g":"SQUAD1","n":"DIE-2","m":"mc","c":null,"d":10,"r":["............","............","............","............","............","............","............","............","............","............","............","............",".....KFFF...","......KGK...","............","............","............","............","............","............","............"]},{"g":"EXPLOSION","n":"BLAST-0","m":"mc","c":1,"d":5,"r":["............","............","............","............","............","............",".....GK.....",".....KFK....","....KFFG....","....FFFK....","....FFFGK...",".....FFG....","....GKF.....",".....FFK....",".....GG.....","......K.....","............","............","............","............","............"]},{"g":"EXPLOSION","n":"BLAST-1","m":"mc","c":7,"d":5,"r":["............","............","............",".....K......",".....KKK....","....KKKG....","...GGKFG....","..KGFFFGK...","...KFFFFGG..","...GFFFFG...","...FFF.FG...","...KFFFFGK..","...GFFFFGG..","...KKFFFK...","...KFFFGG...","....GFF.K...",".....GKK....",".....KK.....","............","............","............"]},{"g":"EXPLOSION","n":"BLAST-2","m":"mc","c":7,"d":5,"r":["............","......G.....","....K.GG....","...KGGKKG...","...GFFFFG...","...FGFFFF...","..GKFFFFFG..","..GFFFFFFG..","..GFFFFFFG..","..GFFFFFFK..",".KFFFFFFFG..",".GFFFFFFFG..",".GKFFFFFFG..","..GFFFFFFG..","..KFFFFFGG..","..KFFFFFFK..","...KGFFFG...","...KGFFKG...","....KKGG....","............","............"]},{"g":"EXPLOSION","n":"BLAST-3","m":"mc","c":8,"d":5,"r":[".....G......","...GKKG.K...","...GKKGGG...","..KKGGGGG...","..KGFGGGGKK.",".GKGGFFGGG..","..GFFFFFFGG.",".GGFFFFFGKG.",".GGFFF.FFKG.",".KGFF..FFGK.","..GF....GGG.",".GGFFF..FGG.",".KGFFF.FFKK.","..GFF.FFGKK.","..GGFFFFGK..","..GGGFFKGK..","..GGKFFGKG..","...KKGGKGG..","...GGGGGG...",".....GK.G...","......GK...."]},{"g":"EXPLOSION","n":"BLAST-4","m":"mc","c":2,"d":5,"r":["...KGKG.....",".....GGGG...","...KGGGGG...","...GKGGGGGK.",".KGKGGGKKGG.","..GKGKGKGG..",".GKG...GGGG.","KKG.....GGK.",".GGG....GGGG",".GG.....GGG.",".KK.....KKG.",".KK......GK.",".KGG....GGG.",".KGKG..GGGG.",".GGG....GGG.","..GKGGG.KG..","..GGGGGGG...","..GGGGGGG...","....GGKGG...","....GGGGG...","....GK.G...."]},{"g":"EXPLOSION","n":"BLAST-5","m":"mc","c":11,"d":5,"r":[".....G.K....","....GGGK....","..KGGKKGK...","..GG.KKGGG..","..G.....GGG.",".GG.....GGG.",".GGK.....KK.",".KG......GG.",".KK......GG.",".GG.......G.","GG........G.",".G.......KK.",".GG......GG.","KK.......GG.",".GG......G..","..G......G..","...GG.G.GG..","...GGG.GGG..","...KGK.GG...","....GKG.....","......G....."]},{"g":"CURSOR","n":"POINTER","m":"hr","c":1,"d":8,"r":["#.......................","##......................","###.....................","####....................","#####...................","######..................","#######.................","########................","#########...............","#########...............","####.##.................","###..##.................","##....##................","#.....##................","......##................","........................","........................","........................","........................","........................","........................"]},{"g":"CURSOR","n":"MOVE-0","m":"hr","c":13,"d":10,"r":["........................",".........######.........","..........####..........","...........##...........","........................","........................","........................","..#..................#..","..##................##..","..###..............###..","..####............####..","..###..............###..","..##................##..","..#..................#..","........................","........................","........................","...........##...........","..........####..........",".........######.........","........................"]},{"g":"CURSOR","n":"MOVE-1","m":"hr","c":13,"d":10,"r":["........................","........................","........................","........########........",".........######.........","..........####..........","...........##...........",".....#............#.....",".....##..........##.....",".....###........###.....",".....####......####.....",".....###........###.....",".....##..........##.....",".....#............#.....","...........##...........","..........####..........",".........######.........","........########........","........................","........................","........................"]},{"g":"CURSOR","n":"ATTACK-0","m":"hr","c":10,"d":10,"r":["...........##...........","...........##...........","...........##...........","........##.##.##........","......###..##..###......","......#....##....#......",".....#............#.....","....##............##....","....#..............#....","........................","..######...##...######..","........................","....#..............#....","....##............##....",".....#............#.....","......#....##....#......","......###..##..###......","........##.##.##........","...........##...........","...........##...........","...........##..........."]},{"g":"CURSOR","n":"ATTACK-1","m":"hr","c":10,"d":10,"r":["........................","........................","...........##...........","...........##...........",".........#.##.#.........","........##.##.##........",".......#...##...#.......","......##...##...##......","......#..........#......","........................","...######..##..######...","........................","......#..........#......","......##...##...##......",".......#...##...#.......","........##.##.##........",".........#.##.#.........","...........##...........","...........##...........","........................","........................"]},{"g":"CURSOR","n":"NO-GO","m":"hr","c":2,"d":8,"r":["........................","........................","........................",".........######.........",".......###....###.......","......##........##......",".....####........##.....",".....##.##.......##.....","....##...##.......##....","....##....##......##....","....##.....##.....##....","....##......##....##....","....##.......##...##....",".....##.......##.##.....",".....##........####.....","......##........##......",".......###....###.......",".........######.........","........................","........................","........................"]},{"g":"CURSOR","n":"SELECT","m":"hr","c":1,"d":8,"r":["#####..............#####","#......................#","#......................#","#......................#","#......................#","........................","........................","........................","........................","........................","........................","........................","........................","........................","........................","........................","#......................#","#......................#","#......................#","#......................#","#####..............#####"]}]};
+const P = D.palette, S = D.sprites;
+const G = Object.fromEntries(D.groups.map(g => [g.key, g]));
+const byName = {};
+S.forEach((s, i) => { byName[s.g + ":" + s.n] = i; });
+const NAMES = ["black","white","red","cyan","purple","green","blue","yellow","orange","brown","light red","dark grey","grey","light green","light blue","light grey"];
+const st = { shadows: true, terrain: D.terrain, player: D.player, enemy: D.enemy, mc1: D.mc1, zoom: 3, playing: true, speed: 1 };
+
+function drawSprite(ctx, idx, x, y, k, faction) {
+  const s = S[idx];
+  const fc = P[s.c == null ? faction : s.c];
+  const col = { K: P[D.mc0], G: P[st.mc1], F: fc, "#": fc };
+  const mc = s.m === "mc", w = mc ? 2 : 1;
+  for (let r = 0; r < 21; r++) {
+    const line = s.r[r];
+    for (let c = 0; c < line.length; c++) {
+      const ch = line[c];
+      if (ch === ".") continue;
+      ctx.fillStyle = col[ch];
+      ctx.fillRect(x + c * w * k, y + r * k, w * k, k);
+    }
+  }
+}
+
+const SHADOW_DX = 6, SHADOW_DY = 12;  // shadow offset from the helicopter, in pixels
+function mod(a, n) { return ((a % n) + n) % n; }
+
+function el(tag, attrs = {}, kids = []) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "text") e.textContent = v; else if (k === "html") e.innerHTML = v; else e.setAttribute(k, v);
+  }
+  for (const kid of [].concat(kids)) if (kid) e.append(kid);
+  return e;
+}
+
+// ---- animated views: each player is a canvas cycling through a frame list
+const players = [];
+function spriteCanvas(seq, opts = {}) {
+  const cv = el("canvas", { class: "spr", width: 24, height: 21 });
+  const p = { cv, seq, faction: opts.faction ?? "player", delay: opts.delay ?? S[seq[0]].d, scale: opts.scale ?? 1,
+    under: opts.under, w: opts.under != null ? 30 : 24, h: opts.under != null ? 33 : 21 };
+  players.push(p);
+  return cv;
+}
+function paintPlayer(p, tick) {
+  const k = st.zoom * p.scale, cv = p.cv;
+  if (cv.width !== Math.round(p.w * k)) { cv.width = Math.round(p.w * k); cv.height = Math.round(p.h * k); }
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = P[st.terrain]; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (p.under != null && st.shadows) drawSprite(ctx, p.under, SHADOW_DX * k, SHADOW_DY * k, k, 0);
+  const i = p.seq[mod(Math.floor(tick / p.delay), p.seq.length)];
+  if (i >= 0) drawSprite(ctx, i, 0, 0, k, p.faction === "enemy" ? st.enemy : st.player);
+}
+
+function frameTile(i) {
+  const s = S[i];
+  const id = el("span", { class: "id", text: s.g + " " + s.n });
+  if (s.g === "EXPLOSION") id.prepend(el("span", { class: "dot", style: `background:${P[s.c]}` }));
+  return el("div", { class: "frame" }, [
+    spriteCanvas([i], { scale: 0.67 }),
+    id,
+    el("span", { class: "no", text: "#" + String(i).padStart(3, "0") }),
+  ]);
+}
+function strip(base, count) {
+  const w = el("div", { class: "strip" });
+  for (let i = base; i < base + count; i++) w.append(frameTile(i));
+  return w;
+}
+
+// ---- vehicles
+const VEH = [
+  ["TANK", "Light tank", "Main battle unit. A turret with a hatch, a rear engine grille, and tracks running both sides."],
+  ["BUGGY", "Recon buggy", "Fast scout with a roll cage and a forward machine gun."],
+  ["HARVESTER", "Harvester", "Ore collector. The front scoop spins, the cab sits front-right, and the hopper is open."],
+  ["HELI", "Attack helicopter", "Side-on gunship after your reference art: white canopy, stub wings with rocket pods, skids. The main rotor alternates long and short blade frames, and the tail rotor flickers. N, NE, E, SE and S are drawn; W, NW and SW are mirrors."],
+];
+const COMPASS = ["NW", "N", "NE", "W", null, "E", "SW", "S", "SE"];
+for (const [key, title, desc] of VEH) {
+  const g = G[key];
+  const comp = el("div", { class: "compass" });
+  for (const d of COMPASS) {
+    if (!d) { comp.append(el("div", { class: "hub", text: "▲ N" })); continue; }
+    const di = D.dirs.indexOf(d);
+    const under = key === "HELI" ? G.SHADOW.base + di : undefined;
+    comp.append(el("div", { class: "cell" }, [spriteCanvas([g.base + di * 2, g.base + di * 2 + 1], { under }), el("span", { text: d })]));
+  }
+  document.getElementById("vehicles").append(el("div", { class: "bay" }, [
+    el("div", {}, [el("h3", { text: title }), el("div", { class: "meta", text: `${g.count} frames · ${g.count * 64} bytes` }), comp]),
+    el("div", { class: "strip-wrap" }, [el("p", { class: "meta", text: desc }), strip(g.base, g.count),
+      key === "HELI" ? el("p", { class: "meta", style: "margin-top:14px", text: "Ground shadows: a hires sprite in black with every other pixel set, so the terrain shows through. One per heading, with no rotor. Turn them on or off with Shadows in the bar above; the game will offer the same option." }) : null,
+      key === "HELI" ? strip(G.SHADOW.base, G.SHADOW.count) : null]),
+  ]));
+}
+
+// ---- infantry: one row per squad strength, same sequences in each
+{
+  const seqs = [
+    ["Walk N", ["WALK-N-0", "WALK-N-1"]], ["Walk E", ["WALK-E-0", "WALK-E-1"]],
+    ["Walk S", ["WALK-S-0", "WALK-S-1"]], ["Walk W", ["WALK-W-0", "WALK-W-1"]],
+    ["Fire E", ["FIRE-E-0", "FIRE-E-1"]], ["Fire W", ["FIRE-W-0", "FIRE-W-1"]],
+    ["Die", ["DIE-0", "DIE-1", "DIE-2", "DIE-2", "DIE-2", "DIE-2"]],
+  ];
+  const host = document.getElementById("infantry");
+  for (const n of [3, 2, 1]) {
+    const g = G["SQUAD" + n], box = el("div", { class: "seqs" });
+    seqs.forEach(([t, names], i) => {
+      const f = i % 2 ? "enemy" : "player";
+      box.append(el("div", { class: "seq" }, [spriteCanvas(names.map(x => byName[g.key + ":" + x]), { faction: f }), el("b", { text: t }), el("span", { text: f + " colour" })]));
+    });
+    host.append(el("div", { class: "bay" }, [
+      el("div", {}, [el("h3", { text: `${n} soldier${n > 1 ? "s" : ""}` }), el("div", { class: "meta", text: `SQUAD${n} · ${g.count} frames · ${g.count * 64} bytes` })]),
+      el("div", { class: "strip-wrap" }, [box, el("div", { style: "height:14px" }), strip(g.base, g.count)]),
+    ]));
+  }
+}
+
+// ---- explosion
+{
+  const g = G.EXPLOSION, seq = [];
+  for (let i = 0; i < g.count; i++) seq.push(g.base + i);
+  seq.push(-1, -1, -1, -1);  // short pause between loops
+  document.getElementById("fx").append(el("div", { class: "bay" }, [
+    el("div", {}, [el("h3", { text: "Blast" }), el("div", { class: "meta", text: `${g.count} frames · ${g.count * 64} bytes` }), spriteCanvas(seq, { scale: 1.34 })]),
+    el("div", { class: "strip-wrap" }, [strip(g.base, g.count)]),
+  ]));
+}
+
+// ---- cursors
+{
+  const g = G.CURSOR;
+  const seqs = [["Pointer", ["POINTER"]], ["Move order", ["MOVE-0", "MOVE-1"]], ["Attack order", ["ATTACK-0", "ATTACK-1"]], ["Blocked", ["NO-GO"]], ["Selected unit", ["SELECT"]]];
+  const box = el("div", { class: "seqs" });
+  for (const [t, names] of seqs) box.append(el("div", { class: "seq" }, [spriteCanvas(names.map(x => byName["CURSOR:" + x])), el("b", { text: t })]));
+  document.getElementById("cursors").append(el("div", { class: "bay" }, [
+    el("div", {}, [el("h3", { text: "Cursor set" }), el("div", { class: "meta", text: `${g.count} frames · ${g.count * 64} bytes` })]),
+    el("div", { class: "strip-wrap" }, [box, el("div", { style: "height:14px" }), strip(g.base, g.count)]),
+  ]));
+}
+
+// ---- header chips + memory table
+{
+  const total = S.length;
+  const chips = document.getElementById("chips");
+  [["Sprites", total], ["Bytes", (total * 64).toLocaleString()], ["Multicolor", "12×21 cells"], ["Colours per sprite", "3 + transparent"]]
+    .forEach(([k, v]) => chips.append(el("span", { class: "chip", html: `${k} <b>${v}</b>` })));
+  const mem = document.getElementById("mem");
+  mem.append(el("tr", {}, [el("th", { text: "Group" }), el("th", { text: "Frames" }), el("th", { text: "Bytes" }), el("th", { text: "First #" })]));
+  for (const g of D.groups) mem.append(el("tr", {}, [el("td", { text: g.title }), el("td", { text: g.count }), el("td", { text: g.count * 64 }), el("td", { text: "#" + String(g.base).padStart(3, "0") })]));
+  mem.append(el("tr", {}, [el("td", { html: "<b>Total</b>" }), el("td", { text: total }), el("td", { text: total * 64 }), el("td", { text: "" })]));
+}
+
+// ---- controls
+function swatchRow(id, key, allowed) {
+  const row = document.getElementById(id);
+  for (const ci of allowed) {
+    const b = el("button", { class: "sw", type: "button", title: NAMES[ci], "aria-label": NAMES[ci], "aria-pressed": String(st[key] === ci) });
+    b.style.background = P[ci];
+    b.style.borderColor = ci === 0 || ci === 6 ? "#4a3fa0" : "transparent";
+    b.onclick = () => {
+      st[key] = ci;
+      row.querySelectorAll(".sw").forEach(x => x.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+      repaint();
+    };
+    row.append(b);
+  }
+}
+swatchRow("sw-terrain", "terrain", [5, 13, 9, 8, 12, 11, 0]);
+swatchRow("sw-player", "player", [7, 1, 3, 13, 14, 15, 8]);
+swatchRow("sw-enemy", "enemy", [2, 10, 4, 8, 6, 12]);
+{
+  const sel = document.getElementById("mc1");
+  [15, 12, 11, 1, 3].forEach(ci => sel.append(el("option", { value: ci, text: `${ci} ${NAMES[ci]}` })));
+  sel.value = st.mc1;
+  sel.onchange = () => { st.mc1 = +sel.value; repaint(); };
+}
+document.getElementById("zoom").onchange = e => { st.zoom = +e.target.value; repaint(); };
+document.getElementById("speed").onchange = e => { st.speed = +e.target.value; };
+const shBtn = document.getElementById("shadows");
+shBtn.onclick = () => {
+  st.shadows = !st.shadows;
+  shBtn.textContent = st.shadows ? "Shadows on" : "Shadows off";
+  shBtn.setAttribute("aria-pressed", String(st.shadows));
+  repaint();
+};
+const playBtn = document.getElementById("play");
+playBtn.onclick = () => {
+  st.playing = !st.playing;
+  playBtn.textContent = st.playing ? "Pause" : "Play";
+  playBtn.setAttribute("aria-pressed", String(!st.playing));
+};
+
+// ---- battlefield scene
+const field = document.getElementById("field"), fctx = field.getContext("2d");
+function rng(seed) { return () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296; }
+const tufts = (() => { const r = rng(7), out = []; for (let i = 0; i < 260; i++) out.push([Math.floor(r() * 160) * 2, Math.floor(r() * 200), r()]); return out; })();
+const ore = (() => { const r = rng(42), out = []; for (let i = 0; i < 46; i++) { const a = r() * 6.28, d = Math.sqrt(r()) * 26; out.push([250 + Math.cos(a) * d * 1.3, 52 + Math.sin(a) * d * 0.8]); } return out; })();
+const TUFT = { 5: [13, 9], 13: [5, 15], 9: [8, 11], 8: [9, 10], 12: [11, 15], 11: [12, 0], 0: [11, 6] };
+
+function dirOf(dx, dy) {
+  const a = Math.atan2(dx, -dy);
+  return ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
+}
+function path(points, speed) {
+  const segs = [];
+  let total = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i], b = points[(i + 1) % points.length];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    segs.push({ a, b, len, start: total });
+    total += len;
+  }
+  return t => {
+    let d = (t * speed) % total;
+    const s = segs.find(s => d < s.start + s.len) || segs[segs.length - 1];
+    const f = (d - s.start) / s.len;
+    return { x: s.a[0] + (s.b[0] - s.a[0]) * f, y: s.a[1] + (s.b[1] - s.a[1]) * f, dir: dirOf(s.b[0] - s.a[0], s.b[1] - s.a[1]) };
+  };
+}
+const units = [
+  { g: "TANK", f: "player", p: path([[60, 150], [140, 150], [170, 120], [170, 80], [140, 50], [60, 50], [30, 80], [30, 120]], 0.45), sel: true },
+  { g: "TANK", f: "enemy", p: path([[230, 160], [290, 160], [290, 110], [230, 110]], 0.3), target: true },
+  { g: "HARVESTER", f: "player", p: path([[80, 100], [210, 56], [250, 56], [210, 56]], 0.25) },
+  { g: "BUGGY", f: "enemy", p: path([[110, 175], [150, 185], [190, 175], [200, 140], [190, 105], [150, 95], [110, 105], [100, 140]], 0.9) },
+];
+const helis = [
+  { f: "player", p: path([[40, 60], [120, 24], [200, 60], [230, 120], [160, 150], [70, 130]], 0.7) },
+  { f: "enemy", p: path([[300, 180], [250, 140], [300, 100]], 0.5) },
+];
+const squads = [
+  { f: "player", p: path([[40, 30], [120, 30]], 0.18) },
+  { f: "enemy", p: path([[300, 22], [300, 90]], 0.16) },
+];
+{
+  const legend = document.getElementById("field-legend");
+  ["Selected player tank on patrol", "Harvester running between the ore field and base", "Enemy buggy and tank", "Helicopters, one per side", "Rifle squads: the enemy squad thins from 3 to 1, then dies"]
+    .forEach(t => legend.append(el("span", { text: "· " + t })));
+}
+
+function drawField(tick) {
+  const k = 1;
+  fctx.fillStyle = P[st.terrain]; fctx.fillRect(0, 0, 320, 200);
+  const [t1, t2] = TUFT[st.terrain] || [11, 12];
+  for (const [x, y, r] of tufts) { fctx.fillStyle = P[r < 0.6 ? t1 : t2]; fctx.fillRect(x, y, 2, 1); }
+  for (const [x, y] of ore) {
+    fctx.fillStyle = P[3]; fctx.fillRect(Math.round(x / 2) * 2, Math.round(y), 2, 2);
+    fctx.fillStyle = P[1]; fctx.fillRect(Math.round(x / 2) * 2, Math.round(y), 2, 1);
+  }
+  // base pad placeholder
+  fctx.fillStyle = P[12]; fctx.fillRect(56, 84, 40, 32);
+  fctx.fillStyle = P[11]; fctx.fillRect(58, 86, 36, 28);
+  fctx.fillStyle = P[15]; fctx.fillRect(64, 94, 24, 4); fctx.fillRect(64, 102, 24, 4);
+
+  const fc = f => f === "enemy" ? st.enemy : st.player;
+  const placed = [];
+  for (const u of units) {
+    const q = u.p(tick), g = G[u.g];
+    const frame = g.base + q.dir * 2 + (Math.floor(tick / 6) % 2);
+    placed.push({ q, frame, f: u.f, u });
+  }
+  for (const s of squads) {
+    // the player squad halts and fires for the last third of every 150 ticks
+    const phase = tick % 150, firing = s.f === "player" && phase >= 100;
+    const q = s.p(s.f === "player" ? Math.floor(tick / 150) * 100 + Math.min(phase, 100) : tick);
+    // the enemy squad loses a soldier every 6 seconds: 3, 2, 1, dies, then a fresh squad
+    let key = "SQUAD3", name = ["N", "N", "E", "E", "S", "S", "W", "W"][q.dir];
+    let frame = firing ? "FIRE-E-" + (Math.floor(tick / 5) % 2) : "WALK-" + name + "-" + (Math.floor(tick / 8) % 2);
+    if (s.f === "enemy") {
+      const life = tick % 1000;
+      key = "SQUAD" + (life < 300 ? 3 : life < 600 ? 2 : 1);
+      if (life >= 900) frame = "DIE-" + Math.min(2, Math.floor((life - 900) / 10));
+    }
+    placed.push({ q, frame: byName[key + ":" + frame], f: s.f });
+  }
+  // helicopter shadows sit on the ground, under everything else
+  if (st.shadows) for (const h of helis) {
+    const q = h.p(tick);
+    drawSprite(fctx, G.SHADOW.base + q.dir, Math.round(q.x) - 13 + SHADOW_DX, Math.round(q.y) - 10 + SHADOW_DY, k, 0);
+  }
+  placed.sort((a, b) => a.q.y - b.q.y);
+  for (const o of placed) drawSprite(fctx, o.frame, Math.round(o.q.x) - 13, Math.round(o.q.y) - 10, k, fc(o.f));
+
+  for (const h of helis) {
+    const q = h.p(tick);
+    drawSprite(fctx, G.HELI.base + q.dir * 2 + (Math.floor(tick / 2) % 2), Math.round(q.x) - 13, Math.round(q.y) - 10, k, fc(h.f));
+  }
+
+  // overlays: selection bracket, attack cursor on the enemy tank, periodic blast
+  const sel = placed.find(o => o.u && o.u.sel);
+  drawSprite(fctx, byName["CURSOR:SELECT"], Math.round(sel.q.x) - 12, Math.round(sel.q.y) - 10, k, 1);
+  const tgt = placed.find(o => o.u && o.u.target);
+  const cyc = tick % 200;
+  if (cyc < 120) drawSprite(fctx, byName["CURSOR:ATTACK-" + (Math.floor(tick / 10) % 2)], Math.round(tgt.q.x) - 12, Math.round(tgt.q.y) - 10, k, 10);
+  else {
+    const n = Math.min(5, Math.floor((cyc - 120) / 5));
+    drawSprite(fctx, G.EXPLOSION.base + n, Math.round(tgt.q.x) - 13 + 6, Math.round(tgt.q.y) - 10 - 4, k, 7);
+  }
+  drawSprite(fctx, byName["CURSOR:POINTER"], 200 + Math.round(Math.sin(tick / 60) * 16), 30 + Math.round(Math.cos(tick / 80) * 10), k, 1);
+}
+
+// ---- 50 Hz clock
+let tick = 0, last = performance.now();
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+if (reduce) { st.speed = 0.5; document.getElementById("speed").value = "0.5"; }
+function repaint() { for (const p of players) paintPlayer(p, Math.floor(tick)); drawField(Math.floor(tick)); }
+function loop(now) {
+  requestAnimationFrame(loop);
+  // rAF timestamps can predate the performance.now() taken at start-up, so clamp to 0..100 ms
+  const dt = Math.max(0, Math.min(100, now - last)); last = now;
+  if (!st.playing) return;
+  const before = Math.floor(tick);
+  tick += dt * st.speed / 20;
+  if (Math.floor(tick) !== before) repaint();
+}
+repaint();
+requestAnimationFrame(loop);
+</script>

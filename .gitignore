@@ -47,8 +47,8 @@ htmlcov/
 *.swp
 *.swo
 
-# Downloaded tools & archives
-tools/
+# Downloaded tools & archives (our own tools in tools/<subfolder>/ are tracked)
+tools/kickassembler/
 *.zip
 
 # Example programs and games

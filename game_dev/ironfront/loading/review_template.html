@@ -1,0 +1,364 @@
+<title>IRONFRONT Loading Screen</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: the screen itself first, framed like the machine's border, then how it was built and what to decide.
+   Committed single dark theme, matching the Stage 1 sprite review. */
+:root {
+  color-scheme: dark;
+  --bg: #1d1747;
+  --panel: #262063;
+  --panel-2: #2f2878;
+  --line: #4a3fa0;
+  --fg: #d6d2f5;
+  --muted: #9d96d6;
+  --accent: #b8c76f;
+  --flag: #ff4fa3;          /* overlay marker for cells that lost a colour */
+  --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --r: 3px;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 14px; line-height: 1.55; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+header.top { padding-block: 32px 20px; display: grid; gap: 14px; }
+.eyebrow { font-family: var(--display); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); font-size: 12px; }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(34px, 6vw, 56px); line-height: 1; margin: 0; letter-spacing: .04em; text-wrap: balance; }
+h1 span { color: var(--accent); }
+.lede { max-width: 68ch; margin: 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { border: 1px solid var(--line); border-radius: var(--r); padding: 3px 9px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chip b { color: var(--fg); font-weight: 500; }
+
+.controls { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border-block: 1px solid var(--line); }
+.controls .wrap { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding-block: 10px; }
+button.btn { font: inherit; font-size: 12px; color: var(--fg); background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r); padding: 4px 10px; cursor: pointer; }
+button.btn[aria-pressed="true"] { background: var(--accent); color: #1d1747; border-color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+main { display: grid; gap: 40px; padding-block: 28px 64px; }
+h2 { font-family: var(--display); font-size: 24px; letter-spacing: .06em; margin: 0 0 4px; text-transform: uppercase; }
+p.sub { margin: 0 0 16px; color: var(--muted); max-width: 70ch; }
+
+.monitor { background: #000; padding: clamp(12px, 4vw, 40px); border-radius: 10px; border: 1px solid var(--line); }
+#screen { display: block; width: 100%; max-width: 100%; aspect-ratio: 320 / 200; image-rendering: pixelated; }
+.caption { font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr)); gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; min-width: 0; }
+.panel h3 { font-family: var(--display); font-size: 16px; letter-spacing: .06em; margin: 0 0 10px; text-transform: uppercase; color: var(--accent); }
+.panel ul, .panel ol { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.panel code { color: var(--accent); }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; }
+.compare figure { margin: 0; display: grid; gap: 6px; font-size: 12px; color: var(--muted); }
+.compare img, .compare canvas { width: 100%; max-width: 100%; image-rendering: pixelated; background: #fff; border-radius: 2px; }
+.compare canvas { background: #000; aspect-ratio: 128 / 104; }
+.pal { display: flex; flex-wrap: wrap; gap: 6px; }
+.pal span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pal i { width: 14px; height: 14px; border-radius: 2px; display: inline-block; border: 1px solid var(--line); }
+
+.player { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-bottom: 14px; }
+button.play { font-size: 14px; padding: 8px 16px; }
+#m-time { margin: 0; font-variant-numeric: tabular-nums; }
+.arr-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; }
+.arr { display: grid; grid-template-columns: 74px repeat(18, minmax(34px, 1fr)); gap: 3px; min-width: 760px; font-size: 11px; }
+.arr .lbl { color: var(--muted); align-self: center; }
+.arr .chord { text-align: center; color: var(--muted); }
+.arr .blk { border-radius: 2px; padding: 5px 2px; text-align: center; color: #1d1747; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arr .blk.rest { background: transparent; color: var(--muted); border: 1px dashed var(--line); }
+.arr .blk.on { outline: 2px solid var(--fg); outline-offset: 1px; }
+</style>
+
+<header class="wrap top">
+  <div class="eyebrow">Stage 2 of 3 · Loading screen review</div>
+  <h1>IRON<span>FRONT</span></h1>
+  <p class="lede">The title picture the C64 shows while the game loads. It is a multicolor bitmap: 160×200 wide pixels, and in every 4×8 block the black background plus at most three other colours. What you see below is decoded from the exact bytes in <code>loading.kla</code>.</p>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="controls" aria-label="View settings">
+  <div class="wrap">
+    <button class="btn" id="t-before" type="button" aria-pressed="false">Before colour limits</button>
+    <button class="btn" id="t-grid" type="button" aria-pressed="false">Colour cells</button>
+    <button class="btn" id="t-fix" type="button" aria-pressed="false">Cells that lost a colour</button>
+  </div>
+</div>
+
+<main>
+  <section aria-labelledby="h-screen">
+    <div class="wrap">
+      <h2 id="h-screen">The screen</h2>
+      <p class="sub">A dusk battlefield. Your gunship comes in low on the right, a tank pushes forward, and a rifle squad charges past an explosion, silhouetted against the fire.</p>
+      <div class="monitor"><canvas id="screen" width="320" height="200"></canvas></div>
+      <div class="caption" id="caption"></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-build">
+    <div class="wrap">
+      <h2 id="h-build">How it is built</h2>
+      <p class="sub">Every element is generated by <code>gen_loading.py</code>, so each one can be changed on its own and the picture rebuilt.</p>
+      <div class="grid2">
+        <div class="panel">
+          <h3>Your helicopter</h3>
+          <div class="compare">
+            <figure><img id="ref" alt="Reference helicopter pixel art"><figcaption>Your reference, 64 pixel-art blocks wide</figcaption></figure>
+            <figure><canvas id="heli" width="128" height="104"></canvas><figcaption>On the C64: one block to one wide pixel, two rasterlines tall</figcaption></figure>
+          </div>
+          <p class="caption">Its blue-greys map by brightness to black, dark grey, grey and light grey.</p>
+        </div>
+        <div class="panel">
+          <h3>Scene layers, back to front</h3>
+          <ol>
+            <li>Sky dithered from night black through blue and purple to a red horizon, with a few stars.</li>
+            <li>Ridge line and dirt, darker toward the viewer and lit light red around the blast.</li>
+            <li>Explosion: a fireball from white through yellow and light red to orange and red, with a smoke column blowing right.</li>
+            <li>Helicopter from your art.</li>
+            <li>Rifle squad as black silhouettes, and the player tank in faction yellow.</li>
+            <li>The IRONFRONT logo across the top, and the <i>PRESS FIRE TO DEPLOY</i> prompt.</li>
+          </ol>
+        </div>
+        <div class="panel">
+          <h3>Colours used</h3>
+          <div class="pal" id="pal"></div>
+        </div>
+        <div class="panel">
+          <h3>On the machine</h3>
+          <ul>
+            <li><code>loading_screen.prg</code> shows the picture, plays the title march, and waits for fire on joystick port 2 or SPACE.</li>
+            <li>Bitmap at <code>$2000</code>, screen RAM at <code>$0400</code>, border and background black.</li>
+            <li>In Stage 3, pressing fire will go straight into the game.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-music">
+    <div class="wrap">
+      <h2 id="h-music">Title march</h2>
+      <p class="sub">A D minor military march at 125 BPM for the three SID voices. It opens with two bars of snare rolls, then a sixteen-bar theme in two halves that loops for as long as the screen is up.</p>
+      <div class="player">
+        <button class="btn play" id="m-play" type="button" aria-pressed="false">▶ Play title march</button>
+        <span class="caption" id="m-time">0:00 / <span id="m-len"></span></span>
+      </div>
+      <div class="arr-wrap"><div class="arr" id="arr"></div></div>
+      <p class="caption">This preview runs the real 6502 music driver in an emulator, then plays the SID register writes it produced through a simplified SID model in your browser. The rhythm, notes and instruments are exact. The real 6581 or 8580 chip sounds fuller and grittier, especially the filter, so the final check is on the C64U.</p>
+      <div class="grid2" style="margin-top:16px">
+        <div class="panel">
+          <h3>Instruments</h3>
+          <ul id="inst"></ul>
+        </div>
+        <div class="panel">
+          <h3>On the machine</h3>
+          <ul>
+            <li>Driver and song are 1,351 bytes at <code>$1000</code>, called once per frame from a raster interrupt on line 250.</li>
+            <li>At most <span id="m-lines"></span> raster lines of CPU time per frame.</li>
+            <li>A one-frame hard restart before each note gives every attack the same clean bite.</li>
+            <li><code>ironfront_title.sid</code> plays on its own in any SID player, including the C64U's.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-q">
+    <div class="wrap">
+      <h2 id="h-q">Settled in review 1</h2>
+      <div class="panel">
+        <ol>
+          <li>Logo keeps its lettering and now spans the screen. The tagline is gone.</li>
+          <li>The picture stays fully static.</li>
+          <li>The title march plays while the screen is up.</li>
+          <li>The prompt stays <i>PRESS FIRE TO DEPLOY</i>.</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+const D = /*SCREEN_DATA*/null;
+const REF = "/*REF_URI*/";
+const P = D.palette;
+const st = { before: false, grid: false, fix: false };
+const NAMES = ["black","white","red","cyan","purple","green","blue","yellow","orange","brown","light red","dark grey","grey","light green","light blue","light grey"];
+
+function pix(rows, x, y) { return parseInt(rows[y][x], 16); }
+
+function draw() {
+  const cv = document.getElementById("screen"), ctx = cv.getContext("2d");
+  const rows = st.before ? D.raw : D.final;
+  for (let y = 0; y < 100; y++)
+    for (let x = 0; x < 160; x++) {
+      ctx.fillStyle = P[pix(rows, x, y)];
+      ctx.fillRect(x * 2, y * 2, 2, 2);
+    }
+  if (st.grid) {
+    ctx.fillStyle = "rgba(255,255,255,0.22)";
+    for (let x = 8; x < 320; x += 8) ctx.fillRect(x, 0, 1, 200);
+    for (let y = 8; y < 200; y += 8) ctx.fillRect(0, y, 320, 1);
+  }
+  if (st.fix) {
+    const flag = getComputedStyle(document.documentElement).getPropertyValue("--flag").trim();
+    ctx.strokeStyle = flag; ctx.lineWidth = 1;
+    for (const ci of D.clashes) ctx.strokeRect((ci % 40) * 8 + 0.5, Math.floor(ci / 40) * 8 + 0.5, 7, 7);
+  }
+  document.getElementById("caption").textContent = st.before
+    ? "Before colour limits: the picture as drawn, ignoring the three-colours-per-cell rule."
+    : st.fix ? `${D.clashes.length} outlined cells had a fourth colour, which was swapped for the closest allowed colour.`
+    : "Shown at 320×200, the way the C64 draws it.";
+}
+
+function toggle(id, key) {
+  const b = document.getElementById(id);
+  b.onclick = () => { st[key] = !st[key]; b.setAttribute("aria-pressed", String(st[key])); draw(); };
+}
+toggle("t-before", "before"); toggle("t-grid", "grid"); toggle("t-fix", "fix");
+
+// header chips
+{
+  const used = new Map();
+  for (const row of D.final) for (const ch of row) used.set(ch, (used.get(ch) || 0) + 1);
+  const chips = document.getElementById("chips");
+  [["Koala file", "10,003 bytes"], ["Colour cells", "1,000"], ["Cells adjusted", D.clashes.length], ["Colours used", used.size + " of 16"]]
+    .forEach(([k, v]) => { const s = document.createElement("span"); s.className = "chip"; s.innerHTML = `${k} <b>${v}</b>`; chips.append(s); });
+  const pal = document.getElementById("pal");
+  [...used.entries()].sort((a, b) => b[1] - a[1]).forEach(([ch, n]) => {
+    const c = parseInt(ch, 16), s = document.createElement("span");
+    s.innerHTML = `<i style="background:${P[c]}"></i>${NAMES[c]} · ${(100 * n / 16000).toFixed(1)}%`;
+    pal.append(s);
+  });
+}
+
+// helicopter close-up: crop of the final picture
+{
+  const img = document.getElementById("ref");
+  img.src = REF;
+  const [hx, hy, hw, hh] = D.heli;
+  const cv = document.getElementById("heli"), ctx = cv.getContext("2d");
+  cv.width = hw * 2; cv.height = hh * 2; cv.style.aspectRatio = `${hw} / ${hh}`;
+  for (let y = 0; y < hh; y++)
+    for (let x = 0; x < hw; x++) {
+      ctx.fillStyle = P[pix(D.final, hx + x, hy + y)];
+      ctx.fillRect(x * 2, y * 2, 2, 2);
+    }
+}
+draw();
+
+// ---------------------------------------------------------------- title march
+const M = /*MUSIC_DATA*/null;
+const FPS = 50, RATE = 44100, CLOCK = 985248, SPF = RATE / FPS;
+const BAR_FRAMES = 16 * 6;
+const VOICE_COL = ["#6c5eb5", "#b8c76f", "#9a6759"];
+document.getElementById("m-len").textContent = fmt(M.regs.length / FPS);
+document.getElementById("m-lines").textContent = (M.maxCycles / 63).toFixed(0);
+function fmt(s) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; }
+
+// arrangement chart
+const blocks = [];
+{
+  const arr = document.getElementById("arr");
+  const add = (cls, text, col) => { const d = document.createElement("div"); d.className = cls; d.textContent = text; if (col) d.style.background = col; arr.append(d); return d; };
+  add("lbl", "Bar");
+  M.song.chords.forEach((c, i) => add("chord", `${i + 1}${c ? " " + c : ""}`));
+  M.song.voices.forEach((v, vi) => {
+    add("lbl", v.name);
+    v.bars.forEach((b, bi) => { const d = add("blk" + (b === "rest" ? " rest" : ""), b, b === "rest" ? null : VOICE_COL[vi]); (blocks[bi] ||= []).push(d); });
+  });
+  const list = document.getElementById("inst");
+  const role = { lead: "brass lead: one-frame octave bite, then pulse with sweep and vibrato", bass: "noise click into a filtered pulse", kick: "noise thump into a falling pulse", snare: "noise, pulse body, then noise tail", ghost: "short, soft noise tap", roll: "noise retriggered every 3 frames for 32nd-note rolls" };
+  for (const i of M.song.instruments) { const li = document.createElement("li"); li.innerHTML = `<b>${i.name}</b>: ${role[i.name] || ""} <span class="caption">(AD ${i.ad} SR ${i.sr})</span>`; list.append(li); }
+}
+
+// Simplified SID: 24-bit oscillators, pulse/saw/triangle/noise, ADSR, one state-variable filter.
+const ATTACK_MS = [2, 8, 16, 24, 38, 56, 68, 80, 100, 250, 500, 800, 1000, 3000, 5000, 8000];
+function renderSid(regs) {
+  const n = regs.length * SPF | 0, out = new Float32Array(n);
+  const step = CLOCK / RATE;
+  const vs = [0, 1, 2].map(() => ({ acc: 0, lfsr: 0x7ffff8, nz: 0, env: 0, stage: "rel", gate: 0 }));
+  let lp = 0, bp = 0, s = 0;
+  for (let f = 0; f < regs.length; f++) {
+    const r = regs[f], b = i => parseInt(r.substr(i * 2, 2), 16);
+    const cutoff = (b(0x16) << 3) | (b(0x15) & 7), res = b(0x17) >> 4, route = b(0x17) & 7, vol = b(0x18) & 15;
+    const fc = Math.min(0.9, 2 * Math.sin(Math.PI * (30 + cutoff * 5.8) / RATE)), q = 1 / (0.707 + res / 15 * 1.6);
+    const v = vs.map((st, i) => {
+      const o = i * 7, wave = b(o + 4), ad = b(o + 5), sr = b(o + 6), g = wave & 1;
+      if (g && !st.gate) st.stage = "att";
+      if (!g && st.gate) st.stage = "rel";
+      st.gate = g;
+      return { st, freq: b(o) | b(o + 1) << 8, pw: (b(o + 2) | b(o + 3) << 8) & 0xfff, wave: wave & 0xf0,
+        att: 1 / (ATTACK_MS[ad >> 4] / 1000 * RATE), dec: 1 / (ATTACK_MS[ad & 15] * 3 / 1000 * RATE) * 4,
+        sus: (sr >> 4) / 15, rel: 1 / (ATTACK_MS[sr & 15] * 3 / 1000 * RATE) * 4 };
+    });
+    for (let k = 0; k < SPF && s < n; k++, s++) {
+      let filt = 0, dry = 0;
+      for (let i = 0; i < 3; i++) {
+        const p = v[i], st = p.st;
+        const prev = st.acc;
+        st.acc = (st.acc + p.freq * step) % 16777216;
+        if ((st.acc & 0x80000) && !(prev & 0x80000) || st.acc < prev) {   // clock noise on bit 19
+          const bit = ((st.lfsr >> 22) ^ (st.lfsr >> 17)) & 1;
+          st.lfsr = ((st.lfsr << 1) | bit) & 0x7fffff;
+          st.nz = ((st.lfsr >> 11) & 0x800) | ((st.lfsr >> 10) & 0x400) | ((st.lfsr >> 7) & 0x200) | ((st.lfsr >> 5) & 0x100) |
+                  ((st.lfsr >> 4) & 0x080) | ((st.lfsr >> 1) & 0x040) | ((st.lfsr << 1) & 0x020) | ((st.lfsr << 2) & 0x010);
+        }
+        const a12 = st.acc >> 12;
+        let w = 0xfff, any = false;
+        if (p.wave & 0x10) { w &= (st.acc & 0x800000 ? ~(st.acc >> 11) : st.acc >> 11) & 0xfff; any = true; }
+        if (p.wave & 0x20) { w &= a12; any = true; }
+        if (p.wave & 0x40) { w &= a12 >= p.pw ? 0xfff : 0; any = true; }
+        if (p.wave & 0x80) { w &= st.nz; any = true; }
+        if (!any) w = 0x800;
+        if (st.stage === "att") { st.env += p.att; if (st.env >= 1) { st.env = 1; st.stage = "dec"; } }
+        else if (st.stage === "dec") { st.env += (p.sus - st.env) * p.dec; }
+        else { st.env -= st.env * p.rel; }
+        const x = (w / 4095 * 2 - 1) * st.env;
+        if (route >> i & 1) filt += x; else dry += x;
+      }
+      const hp = filt - lp - q * bp; bp += fc * hp; lp += fc * bp;
+      out[s] = (dry + lp) * vol / 15 * 0.28;
+    }
+  }
+  return out;
+}
+
+let ctx = null, src = null, buffer = null, startAt = 0;
+const LOOP_START = 2 * BAR_FRAMES / FPS, LEN = M.regs.length / FPS;
+const playBtn = document.getElementById("m-play");
+playBtn.onclick = async () => {
+  if (src) { src.stop(); src = null; playBtn.textContent = "▶ Play title march"; playBtn.setAttribute("aria-pressed", "false"); return; }
+  ctx ||= new AudioContext({ sampleRate: RATE });
+  if (!buffer) {
+    playBtn.textContent = "Rendering…";
+    await new Promise(r => setTimeout(r, 20));
+    const pcm = renderSid(M.regs);
+    buffer = ctx.createBuffer(1, pcm.length, RATE);
+    buffer.copyToChannel(pcm, 0);
+  }
+  await ctx.resume();
+  src = ctx.createBufferSource();
+  src.buffer = buffer; src.loop = true; src.loopStart = LOOP_START; src.loopEnd = LEN;
+  src.connect(ctx.destination);
+  src.start();
+  startAt = ctx.currentTime;
+  playBtn.textContent = "■ Stop"; playBtn.setAttribute("aria-pressed", "true");
+  requestAnimationFrame(tickMusic);
+};
+let lastBar = -1;
+function tickMusic() {
+  if (!src) { blocks.flat().forEach(d => d.classList.remove("on")); lastBar = -1; return; }
+  let t = ctx.currentTime - startAt;
+  if (t >= LEN) t = LOOP_START + (t - LEN) % (LEN - LOOP_START);
+  document.getElementById("m-time").firstChild.textContent = fmt(t) + " / ";
+  const bar = Math.floor(t * FPS / BAR_FRAMES);
+  if (bar !== lastBar) {
+    (blocks[lastBar] || []).forEach(d => d.classList.remove("on"));
+    (blocks[bar] || []).forEach(d => d.classList.add("on"));
+    lastBar = bar;
+  }
+  requestAnimationFrame(tickMusic);
+}
+</script>

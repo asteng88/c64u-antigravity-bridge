@@ -263,11 +263,16 @@ def test_export_tap_and_compile_d64_bindings(tk_app):
 def test_tiered_menu_bar_and_bindings(tk_app):
     app = tk_app
     assert app.menu_bar is not None
-    for col_id in ("col-file", "col-build", "col-device", "col-sid", "col-help"):
+    for col_id in ("col-file", "col-build", "col-device", "col-sid", "col-gamedev", "col-help"):
         assert col_id in app.col_frames
 
-    for hdr_id in ("menu-btn-file", "menu-btn-build", "menu-btn-device", "menu-btn-sid", "menu-btn-help"):
+    for hdr_id in ("menu-btn-file", "menu-btn-build", "menu-btn-device", "menu-btn-sid", "menu-btn-gamedev",
+                   "menu-btn-help"):
         assert hdr_id in app.col_headers
+
+    for btn_id in ("btn-gd-sprites", "btn-gd-tileset", "btn-gd-koala", "btn-gd-song", "btn-gd-build",
+                   "btn-gd-c64sim", "btn-gd-sim", "btn-gd-review"):
+        assert btn_id in app.menu_columns["gamedev"], f"Missing game dev button {btn_id}"
 
     for btn_id in (
         "btn-open",
@@ -313,6 +318,15 @@ def test_tiered_menu_bar_and_bindings(tk_app):
 
     app.navigate_menu_key("down")
     assert app.focused_button_id == "btn-help"
+
+    # Game Dev column sits between SID and Help
+    app.action_focus_submenu("gamedev")
+    assert app.focused_button_id == "btn-gd-sprites"
+    app.navigate_menu_key("right")
+    assert app.focused_button_id == "btn-presets"
+    app.action_focus_submenu("gamedev")
+    app.navigate_menu_key("left")
+    assert app.focused_button_id == "btn-decompile-sid"
 
     # Check F1-F11 and Shift+F1-Shift+F9 key bindings
     f_keys = [f"f{i}" for i in range(1, 12)]

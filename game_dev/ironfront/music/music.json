@@ -1,0 +1,138 @@
+{
+ "bpm": 125,
+ "bars": 18,
+ "loopBar": 3,
+ "key": "D minor",
+ "chords": [
+  "",
+  "",
+  "Dm",
+  "Dm",
+  "Bb",
+  "A",
+  "Dm",
+  "Gm",
+  "A",
+  "Dm",
+  "Bb",
+  "F",
+  "C",
+  "A",
+  "Dm",
+  "Gm",
+  "A",
+  "Dm"
+ ],
+ "voices": [
+  {
+   "name": "Bass",
+   "role": "Filtered pulse, oom-pah root and fifth",
+   "bars": [
+    "rest",
+    "rest",
+    "march",
+    "march",
+    "march",
+    "march",
+    "march",
+    "march",
+    "march",
+    "walk",
+    "march",
+    "march",
+    "march",
+    "march",
+    "march",
+    "march",
+    "march",
+    "walk"
+   ]
+  },
+  {
+   "name": "Lead",
+   "role": "Brass-style pulse, PWM and vibrato",
+   "bars": [
+    "rest",
+    "rest",
+    "A",
+    "A",
+    "A",
+    "A",
+    "A",
+    "A",
+    "A",
+    "A",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B",
+    "B"
+   ]
+  },
+  {
+   "name": "Drums",
+   "role": "Kick, snare, ghost notes, snare rolls",
+   "bars": [
+    "roll",
+    "roll",
+    "march",
+    "alt",
+    "march",
+    "alt",
+    "march",
+    "alt",
+    "march",
+    "fill",
+    "march",
+    "alt",
+    "march",
+    "alt",
+    "march",
+    "alt",
+    "march",
+    "fill"
+   ]
+  }
+ ],
+ "instruments": [
+  {
+   "name": "lead",
+   "ad": "$26",
+   "sr": "$A9",
+   "steps": 2
+  },
+  {
+   "name": "bass",
+   "ad": "$06",
+   "sr": "$98",
+   "steps": 2
+  },
+  {
+   "name": "kick",
+   "ad": "$08",
+   "sr": "$00",
+   "steps": 6
+  },
+  {
+   "name": "snare",
+   "ad": "$07",
+   "sr": "$00",
+   "steps": 5
+  },
+  {
+   "name": "ghost",
+   "ad": "$04",
+   "sr": "$00",
+   "steps": 2
+  },
+  {
+   "name": "roll",
+   "ad": "$04",
+   "sr": "$00",
+   "steps": 3
+  }
+ ]
+}

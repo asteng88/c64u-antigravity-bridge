@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import filedialog, messagebox
@@ -36,6 +37,7 @@ except ImportError:  # pragma: no cover
 from .client import C64UClient, C64UClientError
 from .compiler import CrossCompiler, KickAssVersionStatus
 from .d64 import D64Disk, D64Entry, read_d64_file, save_prg_to_d64
+from .gamedev import GAME_TOOLS, default_target_dir, run_tool
 from .prg_decompiler import (
     MediaStageInfo,
     PrgDecompileResult,
@@ -996,6 +998,7 @@ class C64PythonToAsmApp:
         KeyBindingDef("alt+c", "focus_submenu('device')", "Device"),
         KeyBindingDef("alt+s", "focus_submenu('sid')", "SID"),
         KeyBindingDef("alt+h", "focus_submenu('help')", "Help"),
+        KeyBindingDef("alt+g", "focus_submenu('gamedev')", "Game Dev"),
     ]
 
     def __init__(
@@ -1174,10 +1177,10 @@ class C64PythonToAsmApp:
         self.divider_canvas = tk.Canvas(self.studio_frame, height=7, highlightthickness=0, bd=0)
         self.divider_canvas.pack(fill=tk.X, padx=12, pady=(0, 6))
 
-        # 3. 5-Column On-Screen C64 Menu & Command Deck
+        # 3. 6-Column On-Screen C64 Menu & Command Deck
         self.menu_bar = tk.Frame(self.studio_frame, highlightthickness=1)
         self.menu_bar.pack(fill=tk.X, padx=12, pady=(0, 6))
-        for col_i in range(5):
+        for col_i in range(6):
             self.menu_bar.columnconfigure(col_i, weight=1, uniform="menu_col")
 
         self.menu_buttons: dict[str, tk.Button] = {}
@@ -1186,8 +1189,11 @@ class C64PythonToAsmApp:
             "build": [],
             "device": [],
             "sid": [],
+            "gamedev": [],
             "help": [],
         }
+        # last target file per game dev tool, so a rebuild is one click away
+        self.gamedev_targets: dict[str, Path] = {}
 
         menu_spec = [
             (
@@ -1253,10 +1259,28 @@ class C64PythonToAsmApp:
             ),
             (
                 4,
+                "gamedev",
+                "col-gamedev",
+                "menu-btn-gamedev",
+                "50 GAME DEV",
+                self.action_gamedev_sprites,
+                [
+                    ("btn-gd-sprites", "SPRITE BANK  [GEN]", self.action_gamedev_sprites),
+                    ("btn-gd-tileset", "TILES + MAP  [GEN]", self.action_gamedev_tileset),
+                    ("btn-gd-koala", "KOALA SCREEN [GEN]", self.action_gamedev_koala),
+                    ("btn-gd-song", "SONG → SID   [GEN]", self.action_gamedev_song),
+                    ("btn-gd-build", "BUILD GAME   [RUN]", self.action_gamedev_build),
+                    ("btn-gd-c64sim", "C64 SCREEN   [SIM]", self.action_gamedev_c64sim),
+                    ("btn-gd-sim", "SID PROFILE  [SIM]", self.action_gamedev_sim),
+                    ("btn-gd-review", "OPEN REVIEW  [WEB]", self.action_gamedev_open_review),
+                ],
+            ),
+            (
+                5,
                 "help",
                 "col-help",
                 "menu-btn-help",
-                "50 HELP & INFO",
+                "60 HELP & INFO",
                 self.action_show_help,
                 [
                     ("btn-presets", "PRESET DEMOS  [F2]", self.action_open_presets),
@@ -2025,7 +2049,7 @@ class C64PythonToAsmApp:
                 fg=str(t["button_active_fg"]) if is_sel else str(t["panel_fg"]),
             )
 
-        # Style 5-Column Menu Deck
+        # Style 6-Column Menu Deck
         self.menu_bar.configure(bg=str(t["panel_bg"]), highlightbackground=str(t["accent"]))
         for col_f in self.col_frames.values():
             col_f.configure(bg=str(t["panel_bg"]), highlightbackground=str(t["paper"]))
@@ -2695,6 +2719,7 @@ class C64PythonToAsmApp:
         self.root.bind("<Alt-c>", lambda _e: self.action_focus_submenu("device"))
         self.root.bind("<Alt-s>", lambda _e: self.action_focus_submenu("sid"))
         self.root.bind("<Alt-h>", lambda _e: self.action_focus_submenu("help"))
+        self.root.bind("<Alt-g>", lambda _e: self.action_focus_submenu("gamedev"))
 
         self.root.bind("<Key>", self._on_global_key)
 
@@ -2721,6 +2746,7 @@ class C64PythonToAsmApp:
             "build": "quick-btn-run",
             "device": "btn-refresh",
             "sid": "btn-decompile-sid",
+            "gamedev": "btn-gd-sprites",
             "help": "btn-presets",
         }
         btn_id = target_map.get(category, "btn-open")
@@ -2733,10 +2759,10 @@ class C64PythonToAsmApp:
                 pass
 
     def navigate_menu_key(self, key: str) -> None:
-        """Navigate across the 5 displayed C64 menu columns using arrow keys."""
+        """Navigate across the 6 displayed C64 menu columns using arrow keys."""
         if not self.focused_button_id:
             return
-        cats = ["file", "build", "device", "sid", "help"]
+        cats = ["file", "build", "device", "sid", "gamedev", "help"]
         cur_col = -1
         cur_row = -1
         for c_idx, cat in enumerate(cats):
@@ -3374,6 +3400,113 @@ class C64PythonToAsmApp:
             self.notify(f"SID PLAYBACK FAILED: {exc}", severity="error")
 
     # -----------------------------------------------------------------------
+    # Game Dev: sprite banks, tilesets, Koala screens, SID songs, game builds,
+    # headless C64 screenshots, 6502 profiling
+    # -----------------------------------------------------------------------
+
+    def action_gamedev_sprites(self) -> None:
+        self._pick_and_run_game_tool("sprites")
+
+    def action_gamedev_tileset(self) -> None:
+        self._pick_and_run_game_tool("tileset")
+
+    def action_gamedev_koala(self) -> None:
+        self._pick_and_run_game_tool("koala")
+
+    def action_gamedev_build(self) -> None:
+        self._pick_and_run_game_tool("build")
+
+    def action_gamedev_c64sim(self) -> None:
+        self._pick_and_run_game_tool("c64sim")
+
+    def action_gamedev_song(self) -> None:
+        self._pick_and_run_game_tool("song")
+
+    def action_gamedev_sim(self) -> None:
+        self._pick_and_run_game_tool("sim")
+
+    def action_gamedev_open_review(self) -> None:
+        picker = OpenFileModal(initial_path=default_target_dir())
+
+        def on_picked(p: Optional[Path]):
+            if p and p.suffix.lower() in {".html", ".htm"}:
+                self._open_review_page(p)
+            elif p:
+                self.notify("SELECT A REVIEW .HTML PAGE", severity="warning")
+
+        picker.show_tk(self, on_picked)
+
+    def _pick_and_run_game_tool(self, key: str) -> None:
+        """Ask for the tool's target file (starting from the last one used), then run the tool."""
+        tool = GAME_TOOLS[key]
+        last = self.gamedev_targets.get(key)
+        picker = OpenFileModal(initial_path=last.parent if last else default_target_dir())
+
+        def on_picked(p: Optional[Path]):
+            if not p:
+                return
+            if p.suffix.lower() not in tool.suffixes:
+                self.notify(f"{tool.label}: SELECT A {' / '.join(s.upper() for s in tool.suffixes)} FILE",
+                            severity="warning")
+                return
+            self.gamedev_targets[key] = p
+            self._run_game_tool(key, p)
+
+        picker.show_tk(self, on_picked)
+
+    def _run_game_tool(self, key: str, target: Path) -> None:
+        tool = GAME_TOOLS[key]
+        self._pulse_raster_border(f"{tool.label}: {target.name.upper()}", 600)
+        self._write_log(f"▶ {tool.label}: {target}")
+
+        def _worker():
+            result = run_tool(key, target)
+            prg = result.first(".prg") if result.ok and tool.run_result else None
+            run_note = ""
+            if prg:
+                try:
+                    self.client.run_prg(prg)
+                    run_note = f"✓ Running {prg.name} on the C64U"
+                except Exception as exc:
+                    run_note = f"ℹ Built {prg.name}; C64U not reachable ({exc})"
+
+            def _done():
+                if not self.root.winfo_exists():
+                    return
+                for line in result.output.splitlines():
+                    self._write_log(f"  {line}")
+                if not result.ok:
+                    self._write_log(f"✗ {tool.label} failed")
+                    self.notify(f"{tool.label} FAILED", severity="error")
+                    return
+                self._write_log(f"✓ {tool.label} done")
+                self.notify(f"{tool.label} DONE: {target.name.upper()}")
+                sid = result.first(".sid")
+                if sid:
+                    self.last_sid_path = sid
+                    self._write_log(f"  PLAY SID [^P] now plays {sid.name} on the C64U")
+                if prg:
+                    self.last_prg_path = prg
+                    self._write_log(f"  {run_note}")
+                page = result.first(".html") or result.first(".png")
+                if page:
+                    self._open_review_page(page)
+
+            try:
+                self.root.after(0, _done)
+            except (tk.TclError, RuntimeError):
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _open_review_page(self, page: Path) -> None:
+        try:
+            webbrowser.open(page.resolve().as_uri())
+            self._write_log(f"  Opened review page {page.name}")
+        except Exception as exc:
+            self._write_log(f"Could not open {page}: {exc}")
+
+    # -----------------------------------------------------------------------
     # Save ASM, Export TAP, Compile D64, Hardware Controls & Modals
     # -----------------------------------------------------------------------
 
@@ -3697,6 +3830,9 @@ class C64PythonToAsmApp:
             "• Shift+F2 / ^T : Master & Export .TAP Cassette Tape Image\n"
             "• Shift+F9 / ^M : Compile & Package 1541 .D64 Floppy Disk Image\n"
             "• Ctrl+D/B/P    : Decompile SID (^D), Compile SID (^B), Play SID on C64U (^P)\n"
+            "• Alt+G         : Game Dev menu (tools from the repository's tools/ folder)\n"
+            + "".join(f"    {t.label:<16}: {t.describe}\n" for t in GAME_TOOLS.values())
+            + "    OPEN REVIEW     : Open a generated review page in your web browser\n"
         )
         help_box.insert("1.0", guide_content)
         help_box.configure(state="disabled")
