@@ -2,8 +2,10 @@
 
 Standalone build tools for C64 game development. Each one is a plain Python
 script (no dependencies beyond the standard library, plus Java for
-KickAssembler). Each tool is also on the studio's **50 GAME DEV** menu
-(`Alt+G` in `c64u-bridge`), registered in `src/c64u_bridge/gamedev.py`.
+KickAssembler). The studio (`c64u-bridge tui`) runs them for you: load a definition
+file and press `F7`, or start a new one from its **40 GAME DEV** menu. They are
+registered in `src/c64u_bridge/gamedev.py`, and the starter files are in
+`src/c64u_bridge/project.py`.
 
 Tools read a *definition file* that holds the game's own content, and write
 their outputs next to it. Content lives with the game in `game_dev/<game>/`;
@@ -20,6 +22,8 @@ the machinery lives here.
 | `sid/` | `make_psid.py` | music `.prg` | PSID v2 `.sid` |
 | `sim6502/` | `sim6502.py` | `.prg` or `.sid` | runs init/play in a 6502 emulator: crash check, CPU time per frame, SID register log |
 | `c64sim/` | `c64sim.py` | `.prg` | headless C64 on top of `sim6502`: VIC-II rendered per raster line (text/bitmap modes, sprites, borders), raster IRQs, keyboard + joystick from an input script, memory pokes; PNG screenshots of chosen frames |
+| `hyperload/` | `hyperload_tool.py` | `.prg` with a SYS line, loading between `$0800` and `$D000` | HYPERLOAD `.tap`: fast loader with border stripes, about 2m for 45 KB against about 14m for a standard tape |
+| `levels/` | `level_tool.py` | level `.py` (`LEVELS` of dicts, `TABLES` of one-byte fields, `RECORDS` of variable-length byte lists, optional `CHECK`) | `_levels.asm` (`LEVEL_COUNT`, tables, pointer tables), `_levels_review.html` |
 | `build/` | `build_tool.py` | game `build.py` manifest (`STEPS`) | runs the asset tools in order, then KickAssembler; `--shot N` adds a headless screenshot. The studio runs the PRG on the C64U |
 
 Each script's docstring documents its definition-file format; run any of them

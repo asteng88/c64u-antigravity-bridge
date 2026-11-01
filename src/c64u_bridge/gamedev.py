@@ -27,7 +27,6 @@ class GameTool:
     suffixes: tuple[str, ...]   # target file types the tool accepts
     describe: str               # one line for logs and the help guide
     extra_args: tuple[str, ...] = field(default_factory=tuple)
-    run_result: bool = False    # push the .prg it builds to the C64U afterwards
 
 
 GAME_TOOLS: dict[str, GameTool] = {
@@ -42,9 +41,12 @@ GAME_TOOLS: dict[str, GameTool] = {
         GameTool("song", "SONG → SID", "tools/sid/song_tool.py", (".py",),
                  "Compile a song file, assemble it with the SID driver, emulate it and export .sid",
                  ("--build",)),
+        GameTool("levels", "LEVEL TABLES", "tools/levels/level_tool.py", (".py",),
+                 "Compile a level file into KickAssembler tables and a difficulty review page"),
         GameTool("build", "BUILD GAME", "tools/build/build_tool.py", (".py",),
-                 "Rebuild a game from its build.py manifest (assets + KickAssembler) and run it on the C64U",
-                 run_result=True),
+                 "Rebuild a game from its build.py manifest (assets + KickAssembler)"),
+        GameTool("hyperload", "HYPERLOAD TAPE", "tools/hyperload/hyperload_tool.py", (".prg",),
+                 "Turn a PRG into a HYPERLOAD .tap: a fast loader with border stripes"),
         GameTool("c64sim", "C64 SCREENSHOT", "tools/c64sim/c64sim.py", (".prg",),
                  "Run a PRG headless (VIC-II, raster IRQs, sprites) for 300 frames and save a screenshot",
                  ("--frames", "300", "--scale", "2")),
@@ -85,10 +87,10 @@ class ToolResult:
         return next((p for p in self.produced if p.suffix.lower() == suffix), None)
 
 
-def run_tool(key: str, target: Path, timeout: float = 600) -> ToolResult:
+def run_tool(key: str, target: Path, timeout: float = 600, args: tuple[str, ...] = ()) -> ToolResult:
     """Run a tool on a target file and collect its output and the files it wrote."""
     try:
-        res = subprocess.run(tool_command(key, target), cwd=tools_root(), capture_output=True, text=True,
+        res = subprocess.run([*tool_command(key, target), *args], cwd=tools_root(), capture_output=True, text=True,
                              timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return ToolResult(False, str(exc), [])

@@ -226,11 +226,14 @@ c64u-bridge sprite
 Export programs to authentic Commodore 64 `.tap` tape images compatible with tape emulators (Tapecart, 1530 C2N, Ultimate-II+ Tape Emulation):
 
 ```bash
+# HYPERLOAD: a fast-loading tape with border stripes (in the studio: F12)
+python tools/hyperload/hyperload_tool.py game_dev/Heliscape/heliscape.prg
+
 # Export an existing .prg to .tap
-c64u-bridge tap game_dev/heliscape.prg -o heliscape.tap
+c64u-bridge tap game_dev/Heliscape/heliscape.prg -o heliscape.tap
 
 # Compile .asm and master to .tap with custom tape label
-c64u-bridge tap game_dev/heliscape.asm --name "HELISCAPE 64"
+c64u-bridge tap game_dev/Heliscape/heliscape.asm --name "HELISCAPE 64"
 
 # Transpile Python and export to .tap
 c64u-bridge tap examples/rainbow_border.py
@@ -257,31 +260,39 @@ c64u-bridge tui --no-boot
   * **Full 6502 ASM IDE Focus Mode (`Ctrl+E`)**: Expand the 6502 `.asm` editor + Label Outline across the entire screen for pure assembly coding.
   * **New `.asm` Starter Template (`Ctrl+N`)**: Instant KickAssembler `BasicUpstart2(start)` + VIC-II raster loop boilerplate.
 
+### The Sequence
+The studio opens blank, and every job follows the same steps:
+
+1. **Load (`F3`)**: any file goes on screen. Nothing runs yet.
+2. **Build (`F7`)**: saves the file and builds it the way its kind needs: assembles a `.asm` (or its whole game if it has a `build.py`), transpiles and assembles a `.py` program, runs every step of a `build.py`, or runs the tool for a sprite, tile, screen, song or level file.
+3. **Run (`F5`)** or **export** (`Shift+F2` `.tap`, `F12` Hyperload `.tap`, `Shift+F9` `.d64`).
+
+Loading a `.prg`, `.tap`, `.d64` or `.sid` shows its disassembly, after a copyright notice for `.prg`, `.tap` and `.d64`. `F5` runs a loaded `.prg` as it is, and plays a loaded `.sid`, unless you have edited the code.
+
+**40 GAME DEV** (`Alt+G`) starts new things: a game project, a `build.py` written from a folder's files, or a starter sprite bank, tileset, title screen, SID song or level file. Each starter builds as it stands and joins the game's `build.py`.
+
 ### Keyboard Shortcuts & 5-Column Command Deck:
-* **Function Keys (`F1–F11`)**:
+* **Function Keys**:
   * `F1`: Reference Guide & Full Font/Tool Credits
   * `F2`: Built-in Code Presets (Rainbow Border, Screen Matrix, Hello World, SID Chime)
-  * `F3`: Project File Browser (`LOAD "$",8` — Navigate `game_dev/`, `examples/`, and root)
+  * `F3`: Load a File
   * `F4`: Refresh / Ping C64U Connection
-  * `F5`: One-Touch Transpile, Assemble & DMA Run on C64U
+  * `F5`: Build + Run on the C64U
   * `F6`: Transpile Python to 6502 Assembly
-  * `F7`: Assemble `.asm` to `.prg` with KickAssembler
+  * `F7`: Build
   * `F8`: Soft Reset C64U Machine
-  * `F9`: Reverse-Decompile `.d64`, `.tap`, or `.prg` into editable 6502 `.asm` + Python (with Ethical Use & Copyright Caution notice)
-  * `F10` / `Alt+F/B/C/S/H`: Focus On-Screen 5-Column Menu Deck (Navigate with Arrow Keys)
+  * `F10` / `Alt+F/B/C/G/H`: Focus On-Screen 5-Column Menu Deck (Navigate with Arrow Keys)
   * `F11`: Toggle Borderless Fullscreen C64 Monitor Mode
+  * `F12`: Master a `.tap` with the HYPERLOAD Fast Loader and Border Stripes
 * **Shifted Function Keys (`Shift+F1–Shift+F9`) & Editor Shortcuts**:
-  * `Shift+F1` / `Ctrl+S`: Save `.asm` Assembly File
-  * `Shift+F2` / `Ctrl+T`: Master & Export `.tap` Cassette Image
+  * `Shift+F1` / `Ctrl+S`: Save the Loaded File
+  * `Shift+F2`: Master & Export `.tap` Cassette Image
   * `Shift+F3`: DMA Load `.prg` into C64 RAM without executing
   * `Shift+F4` / `Shift+F5`: Pause / Resume 6510 CPU
   * `Shift+F6`: Screen Dump (`$0400` Screen RAM & `$D800` Color RAM)
   * `Shift+F7`: Cold Reboot C64U
   * `Shift+F8` / `Ctrl+Q`: Quit Studio
-  * `Shift+F9` / `Ctrl+M`: Compile & Package 1541 `.d64` Floppy Disk Image
-* **SID Synth Tools**:
-  * `Ctrl+D`: Reverse-Decompile `.sid` to `.asm` + `.py`
-  * `Ctrl+B`: Compile loaded SID source back to `.sid`
+  * `Shift+F9`: Compile & Package 1541 `.d64` Floppy Disk Image
   * `Ctrl+P`: Upload & Play `.sid` on C64U Hardware
 
 ---
@@ -309,7 +320,7 @@ c64u-bridge tui
 c64u-bridge sprite
 
 # Compile and DMA run an assembly file
-c64u-bridge run game_dev/heliscape.asm
+c64u-bridge run game_dev/Heliscape/heliscape.asm
 
 # Directly run a Python file (auto-transpiles, compiles, and DMA executes)
 c64u-bridge run examples/rainbow_border.py
@@ -327,7 +338,7 @@ c64u-bridge sidcompile examples/Commodore_decompiled.asm
 c64u-bridge sidcompile examples/Commodore_decompiled.asm --template examples/Commodore.sid -o compiled.sid
 
 # Export PRG, ASM, or Python to .tap tape image
-c64u-bridge tap game_dev/heliscape.asm --name "HELISCAPE"
+c64u-bridge tap game_dev/Heliscape/heliscape.asm --name "HELISCAPE"
 
 # Inspect the live C64 screen buffer (40x25 text + colors)
 c64u-bridge screen --color
@@ -392,7 +403,7 @@ Antigravity comes preloaded with the authoritative **`c64-development`** master 
 ### Example Prompts:
 * **VIC-II Graphics & Splits**: *"Create a stable double-IRQ raster split with a dark blue sky and desert floor, deploy it, and check the screen."*
 * **SID Music & Sound Effects**: *"Compose a 3-voice in-game theme with an arpeggiated bassline on Voice 1, pulse-width modulated lead on Voice 2, and noise percussion on Voice 3."*
-* **Deployment & Verification**: *"Compile `game_dev/heliscape.asm`, run it on my C64U, and inspect the screen to verify the HUD and sprites."*
+* **Deployment & Verification**: *"Compile `game_dev/Heliscape/heliscape.asm`, run it on my C64U, and inspect the screen to verify the HUD and sprites."*
 * **Memory Inspection**: *"Read memory at `$0002` for 32 bytes to inspect the zero-page game state and player coordinates."*
 * **Hardware Iteration**: *"Reset the machine, change the border color to black, and inject a spacebar keypress."*
 
@@ -400,20 +411,16 @@ Antigravity comes preloaded with the authoritative **`c64-development`** master 
 
 ## 🚁 Featured Showcase: Heliscape: Rescue Protocol
 
-Explore [`game_dev/heliscape.asm`](game_dev/heliscape.asm) for a complete, production-grade 6502 tactical rescue game demonstrating the full power of the bridge:
+Explore [`game_dev/Heliscape/`](game_dev/Heliscape/) for a complete side-scrolling helicopter rescue game built on the studio tools: blast open the POW camps, land next to the prisoners, and carry them home eight at a time across 255 levels, each harder than the last, with a top five table and arcade-style initials.
 
-* **Player Chopper Physics**: Sub-pixel fractional velocity, 3-way directional orientation (facing right, hover, facing left), landing pad docking at base, ceiling altitude boundary, shields, and cargo capacity for up to 16 hostages.
-* **Animated Sprites**: 4-frame animated main/tail rotor blades, animated hostage walking and waving states, and multi-frame animated explosions.
-* **Intelligent Ground & Air Combatants**:
-  * Enemy Tank patrols with an independent rotating 3-position turret (facing left, center, right).
-  * Enemy Jet interceptors flying across altitude corridors with dual afterburners.
-  * Ballistic trajectory projectiles for player vulcan cannon bullets and enemy tank/jet shells.
-* **Destructible Compound Barracks**: Dual hostage compound buildings with independent hit point counters that crack and crumble under fire.
-* **Multi-Voice SID 6581/8580 Audio Engine**:
-  * Voice 1: Driving tactical in-game soundtrack and 4-note hostage rescue chime.
-  * Voice 2: Helicopter turbine hum with real-time 12-bit PWM LFO modulation.
-  * Voice 3: White noise gunfire, explosion sound effects, and analog resonant filter sweeps.
-* **VIC-II Split Raster Interrupts**: Multi-stage raster IRQs driving the tactical status HUD, active combat airspace, and scrolling desert landscape.
+* **Four-Band Parallax**: Clouds, mesas, dunes and the near ground scroll at different speeds over a 2048-pixel world, driven by a raster chain that also changes colours per band for a dithered sky gradient. Six world palettes, from dusk to blood moon.
+* **Custom Graphics**: A multicolor charset for the terrain and buildings, a 48-pixel two-sprite Airwolf-style gunship with tilt, head-on turning pose, animated rotors and retractable wheels, tanks with five barrel angles, POW squads, jets, enemy helicopters and staged explosions.
+* **Sprite Zones**: Hardware sprites 4-7 are reloaded mid-screen, so the sky and the ground each get their own set.
+* **Rescue Gameplay**: Inertial flight with safe-landing limits, cannon and bombs, destructible camps, a cargo limit, repairs at base, radar, friendly fire, and prisoners who can be crushed or run over.
+* **Enemies**: Tanks that hunt the gunship, flak turrets, jets with missiles and enemy helicopters that shoot and bomb.
+* **SID Audio**: A three-voice title theme and a game over march (Chopin's Funeral March) on the studio's tracker driver; in game, a rotor that responds to flight plus prioritised effects and chimes.
+
+Build it with `python tools/build/build_tool.py game_dev/Heliscape/build.py`.
 
 ---
 
@@ -436,9 +443,8 @@ c64u-antigravity-bridge/
 │   ├── rules.md                 # 6502 / VIC-II / SID guidelines
 │   └── c64_memory_map.md        # Fast C64 memory map reference
 ├── game_dev/
-│   ├── heliscape.asm            # Production 6502 tactical rescue game
-│   ├── heliscape.prg            # Compiled C64 binary
-│   └── heliscape.tap            # Mastered cassette tape image
+│   ├── Heliscape/               # Side-scrolling helicopter rescue game
+│   └── ironfront/               # Real-time strategy game
 ├── examples/
 │   ├── hello_world.asm          # SYS bootstrap + color cycle
 │   ├── rainbow_border.py        # Python-to-6502 raster demo

@@ -1,0 +1,46 @@
+{
+ "instruments": [
+  {
+   "name": "lead",
+   "ad": "$37",
+   "sr": "$A8",
+   "steps": 2
+  },
+  {
+   "name": "pad",
+   "ad": "$89",
+   "sr": "$87",
+   "steps": 1
+  },
+  {
+   "name": "bass",
+   "ad": "$05",
+   "sr": "$88",
+   "steps": 2
+  },
+  {
+   "name": "kick",
+   "ad": "$08",
+   "sr": "$00",
+   "steps": 6
+  },
+  {
+   "name": "snare",
+   "ad": "$07",
+   "sr": "$00",
+   "steps": 5
+  },
+  {
+   "name": "hat",
+   "ad": "$02",
+   "sr": "$00",
+   "steps": 2
+  },
+  {
+   "name": "tom",
+   "ad": "$08",
+   "sr": "$00",
+   "steps": 6
+  }
+ ]
+}

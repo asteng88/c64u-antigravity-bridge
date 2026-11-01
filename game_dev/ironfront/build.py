@@ -1,5 +1,5 @@
 """
-IRONFRONT build manifest - for tools/build/build_tool.py (GAME DEV > BUILD GAME).
+IRONFRONT build manifest - for tools/build/build_tool.py (load it and press F7).
 
 Regenerates the sprites, the battlefield tileset and the title music, then
 assembles game/ironfront.asm (title screen + game) into game/ironfront.prg.

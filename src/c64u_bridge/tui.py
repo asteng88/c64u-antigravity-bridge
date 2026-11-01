@@ -20,12 +20,11 @@ import re
 import sys
 import tempfile
 import threading
-import time
 import tkinter as tk
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, simpledialog
 from typing import Callable, Iterable, Optional
 
 try:
@@ -34,10 +33,23 @@ except ImportError:  # pragma: no cover
     Image = None  # type: ignore
     ImageTk = None  # type: ignore
 
-from .client import C64UClient, C64UClientError
+from .client import C64UClient
 from .compiler import CrossCompiler, KickAssVersionStatus
-from .d64 import D64Disk, D64Entry, read_d64_file, save_prg_to_d64
+from .d64 import D64Disk, D64Entry, save_prg_to_d64
 from .gamedev import GAME_TOOLS, default_target_dir, run_tool
+from .project import (
+    DEFINITION_KINDS,
+    KIND_FILES,
+    KIND_FOLDERS,
+    KIND_LABELS,
+    NEW_ASM_TEMPLATE,
+    add_step,
+    classify_file,
+    create_definition,
+    create_game,
+    create_manifest,
+    find_manifest,
+)
 from .prg_decompiler import (
     MediaStageInfo,
     PrgDecompileResult,
@@ -47,9 +59,9 @@ from .prg_decompiler import (
     inspect_media_stages,
 )
 from .screen import format_screen
-from .sid_compiler import SidCompileError, compile_sid_source
+from .sid_compiler import compile_sid_source
 from .sid_decompiler import SidDecompileError, decompile_sid_file
-from .tap import extract_prgs_from_tap, read_tap_info, save_prg_to_tap
+from .tap import save_prg_to_tap
 from .themes import (
     FONT_CREDITS_TEXT,
     THEMES,
@@ -62,44 +74,6 @@ from .transpiler import PRESETS, PythonTo6502Transpiler, TranspileResult
 # ---------------------------------------------------------------------------
 # 6502 Assembly Starter Template & Presets
 # ---------------------------------------------------------------------------
-
-NEW_ASM_TEMPLATE = """// ============================================================================
-// COMMODORE 64 — MOS 6502 / 6510 KICKASSEMBLER SOURCE
-// Press F5 to Assemble & DMA Run on C64U, or F7 to Assemble to .PRG
-// ============================================================================
-
-BasicUpstart2(start)
-
-.const VIC_BORDER_COLOR = $D020
-.const VIC_BG_COLOR0    = $D021
-.const VIC_RASTER_LINE  = $D012
-.const SCREEN_RAM       = $0400
-.const COLOR_RAM        = $D800
-.const KERNAL_CHROUT    = $FFD2
-
-* = $0810 "Main Program"
-
-start:
-    sei
-    lda #$0e            // Light Blue border
-    sta VIC_BORDER_COLOR
-    lda #$06            // Dark Blue background
-    sta VIC_BG_COLOR0
-    cli
-
-main_loop:
-    lda #$fb            // Wait for raster line 251
-!wait:
-    cmp VIC_RASTER_LINE
-    bne !wait-
-
-    inc VIC_BORDER_COLOR
-    nop
-    nop
-    nop
-    dec VIC_BORDER_COLOR
-    jmp main_loop
-"""
 
 ASM_OPCODES_PATTERN = re.compile(
     r"\b("
@@ -964,16 +938,16 @@ class C64PythonToAsmApp:
     BINDINGS: list[KeyBindingDef] = [
         KeyBindingDef("f1", "show_help", "Help & Credits"),
         KeyBindingDef("f2", "open_presets", "Presets"),
-        KeyBindingDef("f3", "open_file", "Open File"),
+        KeyBindingDef("f3", "open_file", "Load File"),
         KeyBindingDef("f4", "refresh_connection", "Ping C64U"),
-        KeyBindingDef("f5", "run_c64u", "DMA Run"),
+        KeyBindingDef("f5", "run_c64u", "Build + Run"),
         KeyBindingDef("f6", "transpile_code", "Transpile"),
-        KeyBindingDef("f7", "assemble_prg", "Assemble"),
+        KeyBindingDef("f7", "build", "Build"),
         KeyBindingDef("f8", "reset_c64u", "Reset C64U"),
-        KeyBindingDef("f9", "decompile_media", "Decompile"),
         KeyBindingDef("f10", "focus_menu", "Menu Bar"),
         KeyBindingDef("f11", "toggle_fullscreen", "Fullscreen"),
-        KeyBindingDef("shift+f1", "save_assembly", "Save ASM"),
+        KeyBindingDef("f12", "export_hyperload", "Hyperload TAP"),
+        KeyBindingDef("shift+f1", "save_file", "Save File"),
         KeyBindingDef("shift+f2", "export_tap", "Export TAP"),
         KeyBindingDef("shift+f3", "load_prg_only", "DMA Load"),
         KeyBindingDef("shift+f4", "pause_cpu", "Pause CPU"),
@@ -982,12 +956,7 @@ class C64PythonToAsmApp:
         KeyBindingDef("shift+f7", "reboot_c64u", "Reboot C64U"),
         KeyBindingDef("shift+f8", "quit", "Quit"),
         KeyBindingDef("shift+f9", "compile_d64", "Compile D64"),
-        KeyBindingDef("ctrl+s", "save_assembly", "Save ASM"),
-        KeyBindingDef("ctrl+t", "export_tap", "Export TAP"),
-        KeyBindingDef("ctrl+m", "compile_d64", "Compile D64"),
-        KeyBindingDef("ctrl+r", "reset_c64u", "Reset C64U"),
-        KeyBindingDef("ctrl+d", "decompile_sid", "Decompile SID"),
-        KeyBindingDef("ctrl+b", "compile_sid", "Compile SID"),
+        KeyBindingDef("ctrl+s", "save_file", "Save File"),
         KeyBindingDef("ctrl+p", "play_sid", "Play SID"),
         KeyBindingDef("ctrl+e", "toggle_asm_focus", "ASM IDE Focus"),
         KeyBindingDef("ctrl+n", "new_asm_template", "New ASM"),
@@ -996,7 +965,6 @@ class C64PythonToAsmApp:
         KeyBindingDef("alt+f", "focus_submenu('file')", "File"),
         KeyBindingDef("alt+b", "focus_submenu('build')", "Build"),
         KeyBindingDef("alt+c", "focus_submenu('device')", "Device"),
-        KeyBindingDef("alt+s", "focus_submenu('sid')", "SID"),
         KeyBindingDef("alt+h", "focus_submenu('help')", "Help"),
         KeyBindingDef("alt+g", "focus_submenu('gamedev')", "Game Dev"),
     ]
@@ -1046,7 +1014,10 @@ class C64PythonToAsmApp:
         self.last_prg_path: Optional[Path] = None
         self.last_sid_path: Optional[Path] = None
         self.loaded_file: Optional[Path] = None
-        self.file_mode: str = "py"  # "py" or "asm"
+        self.file_mode: str = "py"  # "py", "asm", or "def" for a build.py or game definition
+        self.file_kind: str = ""    # see project.classify_file; "" until something is loaded
+        self.binary_source: Optional[Path] = None   # the .prg behind a disassembly
+        self.stage: int = 0         # how far along the sequence: 1 loaded, 2 built, 3 running
         self.asm_focus_mode: bool = False
         self.is_fullscreen: bool = False
 
@@ -1082,10 +1053,7 @@ class C64PythonToAsmApp:
         self.apply_theme(self.current_theme)
         self._bind_shortcuts()
 
-        # Populate initial Rainbow Raster Bars code & transpile into 6502 ASM editor
-        initial_code = PRESETS["Rainbow Raster Bars"]["code"]
-        self._set_python_text(initial_code)
-        self.action_transpile_code(silent=True)
+        self._update_mode_badge()
 
         if start_maximized:
             try:
@@ -1177,10 +1145,10 @@ class C64PythonToAsmApp:
         self.divider_canvas = tk.Canvas(self.studio_frame, height=7, highlightthickness=0, bd=0)
         self.divider_canvas.pack(fill=tk.X, padx=12, pady=(0, 6))
 
-        # 3. 6-Column On-Screen C64 Menu & Command Deck
+        # 3. 5-Column On-Screen C64 Menu & Command Deck
         self.menu_bar = tk.Frame(self.studio_frame, highlightthickness=1)
         self.menu_bar.pack(fill=tk.X, padx=12, pady=(0, 6))
-        for col_i in range(6):
+        for col_i in range(5):
             self.menu_bar.columnconfigure(col_i, weight=1, uniform="menu_col")
 
         self.menu_buttons: dict[str, tk.Button] = {}
@@ -1188,12 +1156,9 @@ class C64PythonToAsmApp:
             "file": [],
             "build": [],
             "device": [],
-            "sid": [],
             "gamedev": [],
             "help": [],
         }
-        # last target file per game dev tool, so a rebuild is one click away
-        self.gamedev_targets: dict[str, Path] = {}
 
         menu_spec = [
             (
@@ -1201,15 +1166,15 @@ class C64PythonToAsmApp:
                 "file",
                 "col-file",
                 "menu-btn-file",
-                "10 FILE & DISK",
+                "10 FILE & TAPE",
                 self.action_open_file,
                 [
-                    ("btn-open", "OPEN FILE     [F3]", self.action_open_file),
+                    ("btn-open", "LOAD FILE     [F3]", self.action_open_file),
                     ("btn-new-asm", "NEW .ASM      [^N]", self.action_new_asm_template),
-                    ("btn-save", "SAVE .ASM    [⇧F1]", self.action_save_assembly),
-                    ("btn-decompile-disk", "DECOMP MEDIA  [F9]", self.action_decompile_media),
+                    ("btn-save", "SAVE FILE    [⇧F1]", self.action_save_file),
                     ("btn-export-tap", "EXPORT .TAP  [⇧F2]", self.action_export_tap),
-                    ("btn-export-d64", "BUILD .D64   [⇧F9]", self.action_compile_d64),
+                    ("btn-export-hyperload", "HYPERLOAD    [F12]", self.action_export_hyperload),
+                    ("btn-export-d64", "EXPORT .D64  [⇧F9]", self.action_compile_d64),
                 ],
             ),
             (
@@ -1217,15 +1182,12 @@ class C64PythonToAsmApp:
                 "build",
                 "col-build",
                 "menu-btn-build",
-                "20 BUILD & DMA",
+                "20 BUILD & RUN",
                 self.action_run_c64u,
                 [
-                    ("quick-btn-run", "▶ DMA RUN     [F5]", self.action_run_c64u),
-                    ("btn-transpile", "PY → 6502     [F6]", self.action_transpile_code),
-                    ("btn-assemble", "ASSEMBLE PRG  [F7]", self.action_assemble_prg),
+                    ("quick-btn-run", "▶ BUILD + RUN [F5]", self.action_run_c64u),
+                    ("btn-build", "BUILD         [F7]", self.action_build),
                     ("btn-load-prg", "DMA LOAD RAM [⇧F3]", self.action_load_prg_only),
-                    ("btn-focus-asm", "ASM IDE MODE  [^E]", self.action_toggle_asm_focus),
-                    ("btn-find-bar", "FIND / GOTO   [^F]", self.action_focus_find),
                 ],
             ),
             (
@@ -1242,51 +1204,39 @@ class C64PythonToAsmApp:
                     ("btn-resume-cpu", "RESUME 6510  [⇧F5]", self.action_resume_cpu),
                     ("btn-screen-dump", "SCREEN DUMP  [⇧F6]", self.action_dump_screen),
                     ("btn-c64u-reboot", "COLD REBOOT  [⇧F7]", self.action_reboot_c64u),
-                ],
-            ),
-            (
-                3,
-                "sid",
-                "col-sid",
-                "menu-btn-sid",
-                "40 SID SYNTH",
-                self.action_decompile_sid,
-                [
-                    ("btn-decompile-sid", "SID → ASM     [^D]", self.action_decompile_sid),
-                    ("btn-compile-sid", "ASM → SID     [^B]", self.action_compile_sid),
                     ("btn-play-sid", "PLAY SID      [^P]", self.action_play_sid),
                 ],
             ),
             (
-                4,
+                3,
                 "gamedev",
                 "col-gamedev",
                 "menu-btn-gamedev",
-                "50 GAME DEV",
-                self.action_gamedev_sprites,
+                "40 GAME DEV",
+                self.action_new_game,
                 [
-                    ("btn-gd-sprites", "SPRITE BANK  [GEN]", self.action_gamedev_sprites),
-                    ("btn-gd-tileset", "TILES + MAP  [GEN]", self.action_gamedev_tileset),
-                    ("btn-gd-koala", "KOALA SCREEN [GEN]", self.action_gamedev_koala),
-                    ("btn-gd-song", "SONG → SID   [GEN]", self.action_gamedev_song),
-                    ("btn-gd-build", "BUILD GAME   [RUN]", self.action_gamedev_build),
+                    ("btn-gd-game", "GAME PROJECT [NEW]", self.action_new_game),
+                    ("btn-gd-build", "BUILD.PY     [NEW]", self.action_new_build_file),
+                    ("btn-gd-sprites", "SPRITE BANK  [NEW]", lambda: self.action_new_definition("sprites")),
+                    ("btn-gd-tileset", "TILES + MAP  [NEW]", lambda: self.action_new_definition("tileset")),
+                    ("btn-gd-koala", "TITLE SCREEN [NEW]", lambda: self.action_new_definition("koala")),
+                    ("btn-gd-song", "SID SONG     [NEW]", lambda: self.action_new_definition("song")),
+                    ("btn-gd-levels", "LEVELS       [NEW]", lambda: self.action_new_definition("levels")),
                     ("btn-gd-c64sim", "C64 SCREEN   [SIM]", self.action_gamedev_c64sim),
                     ("btn-gd-sim", "SID PROFILE  [SIM]", self.action_gamedev_sim),
-                    ("btn-gd-review", "OPEN REVIEW  [WEB]", self.action_gamedev_open_review),
                 ],
             ),
             (
-                5,
+                4,
                 "help",
                 "col-help",
                 "menu-btn-help",
-                "60 HELP & INFO",
+                "50 HELP & INFO",
                 self.action_show_help,
                 [
                     ("btn-presets", "PRESET DEMOS  [F2]", self.action_open_presets),
                     ("btn-help", "GUIDE/CREDITS [F1]", self.action_show_help),
                     ("btn-kickass-ver", "KICKASS VER  [UPD]", self.action_check_kickass_version),
-                    ("btn-replay-boot", "REPLAY BOOT  [C64]", self.action_replay_boot),
                     ("btn-quit", "QUIT STUDIO  [⇧F8]", self.action_quit),
                 ],
             ),
@@ -1479,28 +1429,6 @@ class C64PythonToAsmApp:
         # ASM Editor Power Toolbar (New ASM, Save, Comment, Find/Goto, Cursor Line/Col)
         self.asm_toolbar = tk.Frame(self.pane_asm, pady=2)
         self.asm_toolbar.pack(fill=tk.X, pady=(0, 4))
-
-        self.btn_asm_new = tk.Button(
-            self.asm_toolbar,
-            text="+ NEW .ASM",
-            command=self.action_new_asm_template,
-            relief=tk.FLAT,
-            padx=6,
-            pady=2,
-            cursor="hand2",
-        )
-        self.btn_asm_new.pack(side=tk.LEFT, padx=(0, 4))
-
-        self.btn_asm_save = tk.Button(
-            self.asm_toolbar,
-            text="💾 SAVE .ASM",
-            command=self.action_save_assembly,
-            relief=tk.FLAT,
-            padx=6,
-            pady=2,
-            cursor="hand2",
-        )
-        self.btn_asm_save.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_asm_comment = tk.Button(
             self.asm_toolbar,
@@ -1733,7 +1661,7 @@ class C64PythonToAsmApp:
 
         self.credits_hint_lbl = tk.Label(
             self.status_row,
-            text="[F1: GUIDE & CREDITS | F5: DMA RUN]",
+            text="[F3: LOAD | F7: BUILD | F5: RUN]",
             anchor="e",
         )
         self.credits_hint_lbl.pack(side=tk.RIGHT)
@@ -1915,13 +1843,10 @@ class C64PythonToAsmApp:
         self._write_log('**** COMMODORE 64 BASIC V2 ****  //  LOAD "C64-BRIDGE",8,1  //  READY.')
         self._write_log(f"Bridge Target: http://{self.client.host}:{self.client.port}")
         self._write_log("Font Credit: 'Pet Me 64' by Kreative Korporation / Kreative Software (Free Use License 1.2f).")
+        self._write_log("F3 loads a file, 40 GAME DEV starts something new. Then F7 builds it and F5 runs it.")
         if getattr(self, "_in_mainloop", False):
             self.check_bridge_status()
             self.check_kickass_version_startup()
-
-    def action_replay_boot(self) -> None:
-        """Replay the authentic C64 LOAD \"C64-BRIDGE\",8,1 boot animation."""
-        self._start_boot_sequence()
 
     # -----------------------------------------------------------------------
     # Theme Application, Icons & Retro Visuals
@@ -2049,7 +1974,7 @@ class C64PythonToAsmApp:
                 fg=str(t["button_active_fg"]) if is_sel else str(t["panel_fg"]),
             )
 
-        # Style 6-Column Menu Deck
+        # Style 5-Column Menu Deck
         self.menu_bar.configure(bg=str(t["panel_bg"]), highlightbackground=str(t["accent"]))
         for col_f in self.col_frames.values():
             col_f.configure(bg=str(t["panel_bg"]), highlightbackground=str(t["paper"]))
@@ -2114,7 +2039,7 @@ class C64PythonToAsmApp:
 
         # Style Right Pane & ASM Editor
         self.mode_badge_lbl.configure(font=f_small, bg=str(t["paper"]), fg=str(t["accent"]))
-        for btn in (self.btn_asm_new, self.btn_asm_save, self.btn_asm_comment, self.btn_find_go, self.btn_clear_log):
+        for btn in (self.btn_asm_comment, self.btn_find_go, self.btn_clear_log):
             btn.configure(font=f_btn, bg=str(t["button_bg"]), fg=str(t["button_fg"]))
 
         self.find_lbl.configure(font=f_small, bg=str(t["paper"]), fg=str(t["ink"]))
@@ -2454,8 +2379,8 @@ class C64PythonToAsmApp:
 
     def action_new_asm_template(self) -> None:
         """Load a clean KickAssembler 6502 starter template into the ASM editor."""
+        self._begin_load("asm", None)
         self.file_mode = "asm"
-        self.loaded_file = None
         self.last_asm = NEW_ASM_TEMPLATE
         self._set_asm_text(NEW_ASM_TEMPLATE)
         self.switch_tab("tab-asm")
@@ -2502,9 +2427,23 @@ class C64PythonToAsmApp:
         self.find_entry.selection_range(0, tk.END)
 
     def _update_mode_badge(self) -> None:
-        fname = self.loaded_file.name if self.loaded_file else ("UNTITLED.ASM" if self.file_mode == "asm" else "UNTITLED.PY")
-        mode_str = "6502 ASM DIRECT" if self.file_mode == "asm" else "PYTHON → 6502"
-        self.mode_badge_lbl.configure(text=f"[{mode_str} // {fname}]")
+        """Show the file and how far along LOAD > BUILD > RUN it has got."""
+        if self.loaded_file:
+            fname = self.loaded_file.name
+        elif self._has_source():
+            fname = "UNTITLED.ASM" if self.file_mode == "asm" else "UNTITLED.PY"
+        else:
+            fname = "NOTHING LOADED"
+        steps = ("LOAD [F3]", "BUILD [F7]", "RUN [F5]")
+        marks = " > ".join(f"*{step}*" if i < self.stage else step for i, step in enumerate(steps))
+        self.mode_badge_lbl.configure(text=f"[{fname.upper()} // {marks}]")
+        title = KIND_LABELS.get(self.file_kind, KIND_LABELS["python"])
+        self.left_title_lbl.configure(text=f"{title} // {fname.upper()}" if self.file_mode == "def" else title)
+        self.btn_py_to_asm.configure(state=tk.DISABLED if self.file_mode == "def" else tk.NORMAL)
+
+    def _set_stage(self, stage: int) -> None:
+        self.stage = stage
+        self._update_mode_badge()
 
     # -----------------------------------------------------------------------
     # Outer VIC-II Border, Rainbow Strip & Bottom DMA Deck Drawing
@@ -2685,13 +2624,13 @@ class C64PythonToAsmApp:
         self.root.bind("<F4>", lambda _e: self.action_refresh_connection())
         self.root.bind("<F5>", lambda _e: self.action_run_c64u())
         self.root.bind("<F6>", lambda _e: self.action_transpile_code())
-        self.root.bind("<F7>", lambda _e: self.action_assemble_prg())
+        self.root.bind("<F7>", lambda _e: self.action_build())
         self.root.bind("<F8>", lambda _e: self.action_reset_c64u())
-        self.root.bind("<F9>", lambda _e: self.action_decompile_media())
         self.root.bind("<F10>", lambda _e: self.action_focus_menu())
         self.root.bind("<F11>", lambda _e: self.action_toggle_fullscreen())
+        self.root.bind("<F12>", lambda _e: self.action_export_hyperload())
 
-        self.root.bind("<Shift-F1>", lambda _e: self.action_save_assembly())
+        self.root.bind("<Shift-F1>", lambda _e: self.action_save_file())
         self.root.bind("<Shift-F2>", lambda _e: self.action_export_tap())
         self.root.bind("<Shift-F3>", lambda _e: self.action_load_prg_only())
         self.root.bind("<Shift-F4>", lambda _e: self.action_pause_cpu())
@@ -2701,23 +2640,16 @@ class C64PythonToAsmApp:
         self.root.bind("<Shift-F8>", lambda _e: self.action_quit())
         self.root.bind("<Shift-F9>", lambda _e: self.action_compile_d64())
 
-        self.root.bind("<Control-s>", lambda _e: self.action_save_assembly())
-        self.root.bind("<Control-t>", lambda _e: self.action_export_tap())
-        self.root.bind("<Control-m>", lambda _e: self.action_compile_d64())
-        self.root.bind("<Control-r>", lambda _e: self.action_reset_c64u())
-        self.root.bind("<Control-d>", lambda _e: self.action_decompile_sid())
-        self.root.bind("<Control-b>", lambda _e: self.action_compile_sid())
+        self.root.bind("<Control-s>", lambda _e: self.action_save_file())
         self.root.bind("<Control-p>", lambda _e: self.action_play_sid())
         self.root.bind("<Control-e>", lambda _e: self.action_toggle_asm_focus())
         self.root.bind("<Control-n>", lambda _e: self.action_new_asm_template())
         self.root.bind("<Control-f>", lambda _e: self.action_focus_find())
-        self.root.bind("<Control-g>", lambda _e: self.action_focus_find())
         self.root.bind("<Control-q>", lambda _e: self.action_quit())
 
         self.root.bind("<Alt-f>", lambda _e: self.action_focus_submenu("file"))
         self.root.bind("<Alt-b>", lambda _e: self.action_focus_submenu("build"))
         self.root.bind("<Alt-c>", lambda _e: self.action_focus_submenu("device"))
-        self.root.bind("<Alt-s>", lambda _e: self.action_focus_submenu("sid"))
         self.root.bind("<Alt-h>", lambda _e: self.action_focus_submenu("help"))
         self.root.bind("<Alt-g>", lambda _e: self.action_focus_submenu("gamedev"))
 
@@ -2745,8 +2677,7 @@ class C64PythonToAsmApp:
             "file": "btn-open",
             "build": "quick-btn-run",
             "device": "btn-refresh",
-            "sid": "btn-decompile-sid",
-            "gamedev": "btn-gd-sprites",
+            "gamedev": "btn-gd-game",
             "help": "btn-presets",
         }
         btn_id = target_map.get(category, "btn-open")
@@ -2759,10 +2690,10 @@ class C64PythonToAsmApp:
                 pass
 
     def navigate_menu_key(self, key: str) -> None:
-        """Navigate across the 6 displayed C64 menu columns using arrow keys."""
+        """Navigate across the 5 displayed C64 menu columns using arrow keys."""
         if not self.focused_button_id:
             return
-        cats = ["file", "build", "device", "sid", "gamedev", "help"]
+        cats = ["file", "build", "device", "gamedev", "help"]
         cur_col = -1
         cur_row = -1
         for c_idx, cat in enumerate(cats):
@@ -2841,7 +2772,7 @@ class C64PythonToAsmApp:
                 except (tk.TclError, RuntimeError):
                     pass
             except Exception as exc:
-                def _err():
+                def _err(exc=exc):     # Python deletes `exc` when this except block ends
                     if not self.root.winfo_exists():
                         return
                     self.bridge_status_lbl.configure(
@@ -2866,14 +2797,18 @@ class C64PythonToAsmApp:
             )
             self._write_log(f"Ping C64U at http://{self.client.host}:{self.client.port}...")
 
-    def action_transpile_code(self, silent: bool = False) -> None:
+    def action_transpile_code(self, silent: bool = False) -> bool:
         """Transpile Python (MOS 6502 Dialect) source into 6502 Assembly."""
+        if self.file_mode == "def":
+            if not silent:
+                self.notify("THIS FILE IS BUILT WITH F7, NOT TRANSPILED", severity="warning")
+            return False
         source = self.py_text.get("1.0", "end-1c")
         if not source.strip():
             if not silent:
                 self._write_log("No Python source code in LHS editor to transpile.")
                 self.notify("PYTHON EDITOR IS EMPTY", severity="warning")
-            return
+            return False
 
         if not silent:
             self._pulse_raster_border("TRANSPILING PYTHON → 6502 ASM", 350)
@@ -2888,11 +2823,13 @@ class C64PythonToAsmApp:
             if not silent:
                 self._write_log(f"✓ Transpiled successfully ({line_cnt} lines of 6502 assembly).")
                 self.notify(f"TRANSPILED ({line_cnt} LINES 6502 ASM)")
+            return True
         else:
             for err in result.errors:
                 self._write_log(f"Error: {err}")
             if not silent:
                 self.notify("TRANSPILATION FAILED", severity="error")
+            return False
 
     def _update_ast_tree(self, result: TranspileResult) -> None:
         self.ast_listbox.delete(0, tk.END)
@@ -2906,61 +2843,124 @@ class C64PythonToAsmApp:
                 stmt_desc = f"  {type(stmt).__name__}: {ast.unparse(stmt)[:54]}"
                 self.ast_listbox.insert(tk.END, stmt_desc)
 
-    def action_assemble_prg(self) -> None:
-        """Assemble current 6502 assembly to a C64 .prg binary."""
+    def _has_source(self) -> bool:
+        return bool(self.py_text.get("1.0", "end-1c").strip() or self.asm_text.get("1.0", "end-1c").strip())
+
+    def _editor_text(self) -> str:
+        """The text of the loaded file: assembly in ASM mode, the left pane otherwise."""
+        widget = self.asm_text if self.file_mode == "asm" else self.py_text
+        return widget.get("1.0", "end-1c")
+
+    def _asm_unchanged(self) -> bool:
+        return self.asm_text.get("1.0", "end-1c").strip() == self.last_asm.strip()
+
+    def _binary_unchanged(self) -> bool:
+        """A loaded .prg whose disassembly has not been edited runs as it is."""
+        return bool(self.binary_source and self.binary_source.is_file() and self._asm_unchanged())
+
+    def _save_loaded_file(self) -> None:
+        """Building uses what is on screen, so it goes to disk first."""
+        if not self.loaded_file:
+            return
+        text = self._editor_text()
+        if not self.loaded_file.is_file() or self.loaded_file.read_text(encoding="utf-8") != text:
+            self.loaded_file.write_text(text, encoding="utf-8")
+            self._write_log(f"✓ Saved {self.loaded_file}")
+
+    def _project_manifest(self) -> Optional[Path]:
+        """The game's build.py. A disassembly or SID source sits beside a game without being part of it."""
+        if not self.loaded_file or self.file_kind in ("sid", "prg", "bin", "tap", "d64"):
+            return None
+        return find_manifest(self.loaded_file)
+
+    def action_build(self, on_done: Optional[Callable[[Optional[Path]], None]] = None) -> None:
+        """Build whatever is loaded. on_done gets the .prg, or None if this kind of file makes none."""
+        if not self._has_source():
+            self.notify("NOTHING TO BUILD: F3 LOADS A FILE", severity="warning")
+            return
+        self._save_loaded_file()
+        manifest = self._project_manifest()
+        if self.file_mode == "def" and self.loaded_file:
+            self._run_game_tool(self.file_kind, self.loaded_file, on_done)
+        elif self.file_mode == "asm" and manifest:
+            self._write_log(f"Part of the project in {manifest}: building all of it")
+            self._run_game_tool("build", manifest, on_done)
+        elif self.file_kind == "sid":
+            self.action_compile_sid()
+        else:
+            self._assemble_current(on_done)
+
+    def _assemble_current(self, on_done: Optional[Callable[[Optional[Path]], None]] = None) -> None:
+        """Assemble the loaded program, transpiling first if it is in the Python dialect."""
         self._pulse_raster_border("ASSEMBLING 6502 → PRG BINARY", 450)
+        if self.file_mode == "py" and not self.action_transpile_code(silent=True):
+            self.notify("TRANSPILATION FAILED! CHECK LOG", severity="error")
+            return
         asm_text = self.asm_text.get("1.0", "end-1c").strip()
-
-        if self.file_mode == "py" and not asm_text:
-            self.action_transpile_code()
-            asm_text = self.asm_text.get("1.0", "end-1c").strip()
-
         if not asm_text:
             self.notify("NO 6502 ASSEMBLY TO COMPILE", severity="warning")
             return
 
-        src_file = self.loaded_file
-        if self.file_mode == "asm" and src_file and src_file.suffix.lower() in (".asm", ".s") and src_file.exists() and asm_text == self.last_asm.strip():
-            target_asm = src_file
-            out_prg = src_file.with_suffix(".prg")
-            cleanup = False
+        out_prg = self.loaded_file.with_suffix(".prg").resolve() if self.loaded_file else Path("./output.prg").resolve()
+        temp_asm = None
+        if self.file_mode == "asm" and self.loaded_file:
+            target_asm = self.loaded_file
         else:
             with tempfile.NamedTemporaryFile(suffix=".asm", delete=False) as tmp:
                 tmp.write(asm_text.encode("utf-8"))
-                target_asm = Path(tmp.name)
-            out_prg = Path("./output.prg").resolve()
-            cleanup = True
+                target_asm = temp_asm = Path(tmp.name)
 
         self._write_log(f"Assembling {target_asm.name} → {out_prg.name} with KickAssembler...")
         comp_res = self.compiler.compile(target_asm, output_prg=out_prg, assembler="auto")
-
-        if cleanup:
-            try:
-                target_asm.unlink(missing_ok=True)
-            except Exception:
-                pass
+        if temp_asm:
+            temp_asm.unlink(missing_ok=True)
 
         if comp_res.success and out_prg.exists():
             self.last_prg_path = out_prg
             sz = out_prg.stat().st_size
             self._write_log(f"✓ Assembled {out_prg.name} ({sz} bytes)")
-            self.notify(f"ASSEMBLED {out_prg.name} ({sz} BYTES)")
+            self.notify(f"BUILT {out_prg.name} ({sz} BYTES)")
+            self._set_stage(2)
+            if on_done:
+                on_done(out_prg)
         else:
             err = comp_res.error_message or comp_res.stderr or comp_res.stdout
+            self.switch_tab("tab-log")
             self._write_log(f"Assembly Failed: {err}")
             self.notify("ASSEMBLY FAILED! CHECK LOG", severity="error")
 
-    def action_run_c64u(self) -> None:
-        """Assemble and DMA-execute on C64U hardware."""
-        self._pulse_raster_border("DMA UPLOADING & EXECUTING ON C64U", 600)
-        if self.file_mode == "py":
-            self.action_transpile_code(silent=True)
-
-        self.action_assemble_prg()
-        if not self.last_prg_path or not self.last_prg_path.exists():
+    def _build_program(self, use_prg: Callable[[Path], None]) -> None:
+        """Get a .prg for what is loaded, then hand it on. A game's assets build the whole game."""
+        if self._binary_unchanged():
+            use_prg(self.binary_source)
             return
 
-        prg_path = self.last_prg_path
+        def _got(prg: Optional[Path]) -> None:
+            if prg:
+                use_prg(prg)
+            else:
+                self.notify("THIS FILE MAKES NO PROGRAM: IT NEEDS A BUILD.PY", severity="warning")
+
+        manifest = self._project_manifest()
+        if self.file_mode == "def" and self.file_kind != "build" and manifest:
+            self._save_loaded_file()
+            self._run_game_tool("build", manifest, _got)
+        else:
+            self.action_build(_got)
+
+    def action_run_c64u(self) -> None:
+        """Build what is loaded and run it on the C64U: a song plays, anything else DMA-runs."""
+        if self.file_kind == "song":
+            self.action_build(lambda _prg: self.action_play_sid())
+        elif self.file_kind == "sid":
+            if not self._asm_unchanged():
+                self.action_build()
+            self.action_play_sid()
+        else:
+            self._build_program(self._dma_run)
+
+    def _dma_run(self, prg_path: Path) -> None:
+        self._pulse_raster_border("DMA UPLOADING & EXECUTING ON C64U", 600)
         sz = prg_path.stat().st_size
         self._write_log(f"DMA Uploading {prg_path.name} ({sz} bytes) to C64U at {self.client.base_url}...")
 
@@ -2970,117 +2970,94 @@ class C64PythonToAsmApp:
                 self.root.after(0, lambda: (
                     self._write_log(f"✓ DMA RUN Executed Successfully! Response: {dma_res}"),
                     self.notify(f"RUNNING ON C64U ({sz} BYTES)"),
+                    self._set_stage(3),
                 ))
             except Exception as exc:
-                self.root.after(0, lambda: (
-                    self._write_log(f"C64U DMA Run Error: {exc}"),
+                self.root.after(0, lambda err=exc: (
+                    self._write_log(f"C64U DMA Run Error: {err}"),
                     self.notify("DMA UPLOAD FAILED (C64U OFFLINE)", severity="warning"),
                 ))
 
         threading.Thread(target=_dma_worker, daemon=True).start()
 
     def action_open_file(self) -> None:
-        initial_dir = Path.cwd() / "game_dev" if (Path.cwd() / "game_dev").exists() else Path.cwd()
-        modal = OpenFileModal(initial_path=initial_dir)
+        modal = OpenFileModal(initial_path=self.loaded_file.parent if self.loaded_file else default_target_dir())
         modal.show_tk(self, lambda path: self.load_project_file(path) if path else None)
 
+    def _begin_load(self, kind: str, path: Optional[Path]) -> None:
+        """Whatever was built from the last file no longer applies."""
+        self.file_kind = kind
+        self.loaded_file = path
+        self.binary_source = None
+        self.last_prg_path = None
+        self.last_sid_path = None
+        self.stage = 1
+
     def load_project_file(self, path: Path) -> None:
-        """Load `.py`, `.asm`, `.s`, `.sid`, `.prg`, `.tap`, or `.d64` into the C64 studio."""
+        """The start of every sequence: put a file on screen. Nothing runs from here."""
         if not path.exists():
             self.notify(f"FILE NOT FOUND: {path.name}", severity="error")
             return
 
         self._pulse_raster_border(f'LOADING "{path.name.upper()}",8,1', 420)
-        ext = path.suffix.lower()
+        kind = classify_file(path)
 
-        if ext == ".py":
+        if kind in ("build", *DEFINITION_KINDS):
+            self._begin_load(kind, path)
+            self.file_mode = "def"
+            if self.asm_focus_mode:
+                self.action_toggle_asm_focus()
+            self._set_python_text(path.read_text(encoding="utf-8"))
+            self._set_asm_text("")
+            self.last_asm = ""
+            self.switch_tab("tab-log")
+            self._write_log(f"✓ Loaded {KIND_LABELS[kind]}: {path.name}. F7 builds it.")
+            self.notify(f'LOADED "{path.name.upper()}"')
+
+        elif kind == "python":
+            self._begin_load(kind, path)
             self.file_mode = "py"
-            self.loaded_file = path
-            code = path.read_text(encoding="utf-8")
-            self._set_python_text(code)
-            self._update_mode_badge()
+            self._set_python_text(path.read_text(encoding="utf-8"))
             self._write_log(f"✓ Loaded Python source: {path.name} ({path.stat().st_size} bytes)")
             self.notify(f'LOADED "{path.name.upper()}"')
             self.action_transpile_code(silent=True)
 
-        elif ext in (".asm", ".s"):
+        elif kind == "asm":
+            self._begin_load(kind, path)
             self.file_mode = "asm"
-            self.loaded_file = path
             asm_content = path.read_text(encoding="utf-8")
             self.last_asm = asm_content
             self._set_asm_text(asm_content)
             self.switch_tab("tab-asm")
-            self._update_mode_badge()
             self._write_log(
                 f"✓ Loaded 6502 Assembly: {path.name} ({path.stat().st_size} bytes, {len(asm_content.splitlines())} lines)"
             )
             self.notify(f'LOADED "{path.name.upper()}" (6502 ASM MODE)')
 
-            py_source = self._find_python_source_for_asm(path, asm_content)
-            if py_source:
-                self._set_python_text(py_source)
-                self._write_log(f"ℹ Associated Python source loaded in LHS pane ({len(py_source.splitlines())} lines)")
-            else:
-                self._set_python_text("")
-                self._write_log("ℹ Pure 6502 Assembly file loaded (LHS Python pane cleared; use Ctrl+E for Full ASM IDE)")
+            sidecar = path.with_suffix(".py")
+            has_sidecar = sidecar.is_file() and classify_file(sidecar) == "python"
+            self._set_python_text(sidecar.read_text(encoding="utf-8") if has_sidecar else "")
+            if has_sidecar:
+                self._write_log(f"ℹ Its Python source {sidecar.name} is in the left pane")
 
-        elif ext == ".sid":
+        elif kind == "sid":
+            self._begin_load(kind, None)     # the source gets its own file: never save over the .sid
             self._load_sid_file(path)
 
-        elif ext == ".d64":
-            self.action_decompile_media(target_path=path)
+        elif kind in ("d64", "tap", "prg", "bin"):
+            def _shown() -> None:
+                self._begin_load(kind, None)     # likewise for the image
+                if kind in ("prg", "bin"):
+                    self.binary_source = path
+                    self.last_prg_path = path
 
-        elif ext == ".prg":
-            self.last_prg_path = path
-            sz = path.stat().st_size
-            self._write_log(f"Selected PRG binary: {path.name} ({sz} bytes)")
-            try:
-                res = self.client.run_prg(path)
-                self._write_log(f"✓ DMA RUN Executed: {res}")
-                self.notify(f"RUNNING {path.name.upper()} ON C64U")
-            except Exception as exc:
-                self._write_log(f"DMA Run Error: {exc} -- Opening PRG in 6502 Decompiler...")
-                self.action_decompile_media(target_path=path)
+            self.action_decompile_media(path, before=_shown)
 
-        elif ext == ".tap":
-            sz = path.stat().st_size
-            self._write_log(f"Selected TAP Tape Image: {path.name} ({sz} bytes)")
-            try:
-                tap_info = read_tap_info(path.read_bytes())
-                self._write_log(
-                    f"✓ Valid TAP: {tap_info['signature']} v{tap_info['version']} ({tap_info['platform']} {tap_info['video']})"
-                )
-            except Exception as exc:
-                self._write_log(f"TAP Header Warning: {exc}")
-            self.action_decompile_media(target_path=path)
+        else:
+            self.notify(f"CANNOT LOAD {path.suffix.upper()} FILES", severity="warning")
+            return
 
-    def _find_python_source_for_asm(self, path: Path, asm_content: str) -> Optional[str]:
-        py_sidecar = path.with_suffix(".py")
-        if py_sidecar.is_file():
-            try:
-                return py_sidecar.read_text(encoding="utf-8")
-            except Exception:
-                pass
-
-        for cand in (
-            Path.cwd() / "examples" / f"{path.stem}.py",
-            Path.cwd() / "game_dev" / f"{path.stem}.py",
-            Path.cwd() / f"{path.stem}.py",
-        ):
-            if cand.resolve() != py_sidecar.resolve() and cand.is_file():
-                try:
-                    return cand.read_text(encoding="utf-8")
-                except Exception:
-                    pass
-
-        stem_norm = path.stem.lower().replace("_", "").replace("-", "").replace(" ", "")
-        for preset_name, preset_data in PRESETS.items():
-            preset_norm = preset_name.lower().replace("_", "").replace("-", "").replace(" ", "")
-            if stem_norm == preset_norm or (len(stem_norm) >= 4 and (stem_norm in preset_norm or preset_norm in stem_norm)):
-                code = preset_data.get("code")
-                if code:
-                    return str(code)
-        return None
+        self._update_mode_badge()
 
     # -----------------------------------------------------------------------
     # KickAssembler Version Check & Interactive Updater
@@ -3165,26 +3142,19 @@ class C64PythonToAsmApp:
     # Reverse Decompilation (D64 / TAP / PRG / SID) with Copyright Caution
     # -----------------------------------------------------------------------
 
-    def action_decompile_media(self, target_path: Optional[Path] = None) -> None:
+    def action_decompile_media(self, target_path: Path, before: Optional[Callable[[], None]] = None) -> None:
         """Show mandatory copyright & ethical use caution, then reverse-decompile D64/TAP/PRG."""
-        if target_path is not None:
-            caution = CopyrightCautionModal(filename=target_path.name)
-            self._last_caution_modal = caution
-            caution.show_tk(self, lambda ok: self._decompile_file_flow(target_path) if ok else self.notify("DECOMPILATION CANCELLED"))
-            return
-
-        caution = CopyrightCautionModal()
-        self._last_caution_modal = caution
-
-        def on_caution_ack(proceed: bool) -> None:
+        def _on_answer(proceed: bool) -> None:
             if not proceed:
                 self.notify("DECOMPILATION CANCELLED")
                 return
-            picker = OpenFileModal(initial_path=Path.cwd())
-            self._last_open_modal = picker
-            picker.show_tk(self, lambda p: self._decompile_file_flow(p) if (p and p.is_file()) else None)
+            if before:
+                before()
+            self._decompile_file_flow(target_path)
 
-        caution.show_tk(self, on_caution_ack)
+        caution = CopyrightCautionModal(filename=target_path.name)
+        self._last_caution_modal = caution
+        caution.show_tk(self, _on_answer)
 
     def _decompile_file_flow(self, path: Path, scope: Optional[str] = None) -> None:
         self._pulse_raster_border(f"REVERSE-DECOMPILING {path.name.upper()}", 500)
@@ -3292,6 +3262,7 @@ class C64PythonToAsmApp:
     ) -> None:
         self.last_asm = res.assembly
         self.file_mode = "asm"
+        self.stage = 1
         if source_path is not None:
             self.loaded_file = source_path.with_name(f"{source_path.stem}_decompiled.asm")
         self._set_asm_text(res.assembly)
@@ -3325,6 +3296,7 @@ class C64PythonToAsmApp:
             py_path.write_text(result.python, encoding="utf-8")
 
             self.file_mode = "asm"
+            self.file_kind = "sid"
             self.last_sid_path = path
             self.loaded_file = asm_path
             self.last_asm = result.assembly
@@ -3341,15 +3313,6 @@ class C64PythonToAsmApp:
         except (OSError, SidDecompileError) as exc:
             self._write_log(f"SID decompile failed: {exc}")
             self.notify(f"SID DECOMPILE ERROR: {exc}", severity="error")
-
-    def action_decompile_sid(self) -> None:
-        picker = OpenFileModal(initial_path=Path.cwd())
-        picker.show_tk(
-            self,
-            lambda p: self._load_sid_file(p)
-            if (p and p.suffix.lower() == ".sid")
-            else (self.notify("SELECT A .SID FILE", severity="warning") if p else None),
-        )
 
     def action_compile_sid(self) -> None:
         if not self.loaded_file or self.loaded_file.suffix.lower() not in {".asm", ".s", ".py"}:
@@ -3370,6 +3333,7 @@ class C64PythonToAsmApp:
             self.last_sid_path = res.output_sid
             self._write_log(f"✓ SID compiled: {res.output_sid} ({res.payload_size} bytes)")
             self.notify(f"COMPILED {res.output_sid.name}")
+            self._set_stage(2)
         except Exception as exc:
             self._write_log(f"SID compilation failed: {exc}")
             self.notify(f"SID COMPILE FAILED: {exc}", severity="error")
@@ -3377,17 +3341,8 @@ class C64PythonToAsmApp:
     def action_play_sid(self) -> None:
         if self.last_sid_path and self.last_sid_path.is_file():
             self._play_sid_worker(self.last_sid_path)
-            return
-        picker = OpenFileModal(initial_path=Path.cwd())
-
-        def on_picked(p: Optional[Path]):
-            if p and p.suffix.lower() == ".sid":
-                self.last_sid_path = p
-                self._play_sid_worker(p)
-            elif p:
-                self.notify("SELECT A .SID FILE", severity="warning")
-
-        picker.show_tk(self, on_picked)
+        else:
+            self.notify("NO SID YET: LOAD A .SID OR BUILD A SONG", severity="warning")
 
     def _play_sid_worker(self, path: Path) -> None:
         self._pulse_raster_border(f"UPLOADING SID: {path.name.upper()}", 480)
@@ -3395,80 +3350,88 @@ class C64PythonToAsmApp:
             res = self.client.play_sid(path)
             self._write_log(f"✓ Playing {path.name} on C64U SID Player: {res}")
             self.notify(f"PLAYING {path.name.upper()} ON C64U")
+            self._set_stage(3)
         except Exception as exc:
             self._write_log(f"C64U SID playback failed: {exc}")
             self.notify(f"SID PLAYBACK FAILED: {exc}", severity="error")
 
     # -----------------------------------------------------------------------
-    # Game Dev: sprite banks, tilesets, Koala screens, SID songs, game builds,
-    # headless C64 screenshots, 6502 profiling
+    # Game Dev: start something new, then it follows the same sequence
     # -----------------------------------------------------------------------
 
-    def action_gamedev_sprites(self) -> None:
-        self._pick_and_run_game_tool("sprites")
+    def action_new_game(self) -> None:
+        name = simpledialog.askstring("NEW GAME PROJECT", "NAME OF THE GAME:", parent=self.root)
+        if name:
+            self._create_game(name)
 
-    def action_gamedev_tileset(self) -> None:
-        self._pick_and_run_game_tool("tileset")
+    def _create_game(self, name: str) -> None:
+        try:
+            manifest = create_game(name, default_target_dir())
+        except (OSError, ValueError) as exc:
+            self._write_log(f"Could not start the game: {exc}")
+            self.notify(f"NEW GAME FAILED: {exc}", severity="error")
+            return
+        self._write_log(f"✓ Started {manifest.parent}")
+        self.load_project_file(manifest)
 
-    def action_gamedev_koala(self) -> None:
-        self._pick_and_run_game_tool("koala")
+    def action_new_build_file(self) -> None:
+        """Load the project's build.py, first writing one from the folder's files if it has none."""
+        folder = self.loaded_file.parent if self.loaded_file else None
+        if folder is None:
+            chosen = filedialog.askdirectory(title="FOLDER OF THE GAME", initialdir=default_target_dir())
+            if not chosen:
+                return
+            folder = Path(chosen)
+        self._create_build_file(folder)
 
-    def action_gamedev_build(self) -> None:
-        self._pick_and_run_game_tool("build")
+    def _create_build_file(self, folder: Path) -> None:
+        manifest = find_manifest(folder / "build.py") or create_manifest(folder)
+        self.load_project_file(manifest)
+
+    def action_new_definition(self, kind: str) -> None:
+        manifest = self._project_manifest()
+        folder = (manifest.parent / KIND_FOLDERS[kind]) if manifest else default_target_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        chosen = filedialog.asksaveasfilename(
+            title=f"NEW {KIND_LABELS[kind]}",
+            initialdir=folder,
+            initialfile=KIND_FILES[kind],
+            defaultextension=".py",
+            filetypes=[("Python definition", "*.py")],
+        )
+        if chosen:
+            self._create_definition(kind, Path(chosen))
+
+    def _create_definition(self, kind: str, path: Path) -> None:
+        try:
+            create_definition(kind, path)
+            manifest = find_manifest(path)
+            if manifest and add_step(manifest, kind, path):
+                self._write_log(f"✓ Added it to {manifest.name}")
+        except (OSError, ValueError) as exc:
+            self._write_log(f"Could not create {path.name}: {exc}")
+            self.notify(f"NEW FILE FAILED: {exc}", severity="error")
+            return
+        self.load_project_file(path)
 
     def action_gamedev_c64sim(self) -> None:
-        self._pick_and_run_game_tool("c64sim")
-
-    def action_gamedev_song(self) -> None:
-        self._pick_and_run_game_tool("song")
+        self._build_program(lambda prg: self._run_game_tool("c64sim", prg))
 
     def action_gamedev_sim(self) -> None:
-        self._pick_and_run_game_tool("sim")
+        if self.last_sid_path and self.last_sid_path.is_file():
+            self._run_game_tool("sim", self.last_sid_path)
+        else:
+            self._build_program(lambda prg: self._run_game_tool("sim", prg))
 
-    def action_gamedev_open_review(self) -> None:
-        picker = OpenFileModal(initial_path=default_target_dir())
-
-        def on_picked(p: Optional[Path]):
-            if p and p.suffix.lower() in {".html", ".htm"}:
-                self._open_review_page(p)
-            elif p:
-                self.notify("SELECT A REVIEW .HTML PAGE", severity="warning")
-
-        picker.show_tk(self, on_picked)
-
-    def _pick_and_run_game_tool(self, key: str) -> None:
-        """Ask for the tool's target file (starting from the last one used), then run the tool."""
-        tool = GAME_TOOLS[key]
-        last = self.gamedev_targets.get(key)
-        picker = OpenFileModal(initial_path=last.parent if last else default_target_dir())
-
-        def on_picked(p: Optional[Path]):
-            if not p:
-                return
-            if p.suffix.lower() not in tool.suffixes:
-                self.notify(f"{tool.label}: SELECT A {' / '.join(s.upper() for s in tool.suffixes)} FILE",
-                            severity="warning")
-                return
-            self.gamedev_targets[key] = p
-            self._run_game_tool(key, p)
-
-        picker.show_tk(self, on_picked)
-
-    def _run_game_tool(self, key: str, target: Path) -> None:
+    def _run_game_tool(
+        self, key: str, target: Path, on_done: Optional[Callable[[Optional[Path]], None]] = None
+    ) -> None:
         tool = GAME_TOOLS[key]
         self._pulse_raster_border(f"{tool.label}: {target.name.upper()}", 600)
         self._write_log(f"▶ {tool.label}: {target}")
 
         def _worker():
             result = run_tool(key, target)
-            prg = result.first(".prg") if result.ok and tool.run_result else None
-            run_note = ""
-            if prg:
-                try:
-                    self.client.run_prg(prg)
-                    run_note = f"✓ Running {prg.name} on the C64U"
-                except Exception as exc:
-                    run_note = f"ℹ Built {prg.name}; C64U not reachable ({exc})"
 
             def _done():
                 if not self.root.winfo_exists():
@@ -3476,6 +3439,7 @@ class C64PythonToAsmApp:
                 for line in result.output.splitlines():
                     self._write_log(f"  {line}")
                 if not result.ok:
+                    self.switch_tab("tab-log")
                     self._write_log(f"✗ {tool.label} failed")
                     self.notify(f"{tool.label} FAILED", severity="error")
                     return
@@ -3485,12 +3449,15 @@ class C64PythonToAsmApp:
                 if sid:
                     self.last_sid_path = sid
                     self._write_log(f"  PLAY SID [^P] now plays {sid.name} on the C64U")
+                prg = result.first(".prg")
                 if prg:
                     self.last_prg_path = prg
-                    self._write_log(f"  {run_note}")
                 page = result.first(".html") or result.first(".png")
                 if page:
                     self._open_review_page(page)
+                self._set_stage(max(self.stage, 2))
+                if on_done:
+                    on_done(prg)
 
             try:
                 self.root.after(0, _done)
@@ -3510,71 +3477,91 @@ class C64PythonToAsmApp:
     # Save ASM, Export TAP, Compile D64, Hardware Controls & Modals
     # -----------------------------------------------------------------------
 
-    def action_save_assembly(self) -> None:
-        current_text = self.asm_text.get("1.0", "end-1c") or self.last_asm
-        if not current_text.strip():
-            self.notify("NO 6502 ASSEMBLY TO SAVE", severity="warning")
+    def action_save_file(self) -> None:
+        """Save the loaded file, asking for a name if it does not have one yet."""
+        if not self._has_source():
+            self.notify("NOTHING TO SAVE", severity="warning")
             return
-        out_file = self.loaded_file if (self.file_mode == "asm" and self.loaded_file) else Path("./output.asm").resolve()
-        out_file.write_text(current_text, encoding="utf-8")
-        self.last_asm = current_text
-        self._write_log(f"✓ Saved 6502 assembly to {out_file}")
-        self.notify(f'SAVED "{out_file.name.upper()}"')
+        if not self.loaded_file:
+            is_asm = self.file_mode == "asm"
+            chosen = filedialog.asksaveasfilename(
+                title="SAVE FILE",
+                initialdir=default_target_dir(),
+                initialfile="untitled.asm" if is_asm else "untitled.py",
+                defaultextension=".asm" if is_asm else ".py",
+            )
+            if not chosen:
+                return
+            self.loaded_file = Path(chosen)
+        self.loaded_file.write_text(self._editor_text(), encoding="utf-8")
+        if self.file_mode == "asm":
+            self.last_asm = self._editor_text()
+        self._write_log(f"✓ Saved {self.loaded_file}")
+        self.notify(f'SAVED "{self.loaded_file.name.upper()}"')
+        self._update_mode_badge()
+
+    def action_export_hyperload(self) -> None:
+        """Build, then write a .tap with the HYPERLOAD fast loader and border stripes."""
+        def _export(prg: Path) -> None:
+            self._pulse_raster_border("MASTERING HYPERLOAD CASSETTE IMAGE", 480)
+            out_tap = prg.with_suffix(".tap")
+            res = run_tool("hyperload", prg, args=("-o", str(out_tap), "--name", prg.stem))
+            if res.ok:
+                sz = out_tap.stat().st_size
+                self._write_log(f"✓ HYPERLOAD Cassette Image Generated: {out_tap} ({sz} bytes)")
+                self._write_log(res.output)
+                self.notify(f"EXPORTED {out_tap.name.upper()} WITH HYPERLOAD ({sz} BYTES)")
+            else:
+                self._write_log(f"HYPERLOAD Export Error: {res.output}")
+                self.notify(f"HYPERLOAD EXPORT ERROR: {res.output.splitlines()[-1] if res.output else 'see log'}",
+                            severity="error")
+
+        self._build_program(_export)
 
     def action_export_tap(self) -> None:
-        """Assemble and export to a C64-TAPE-RAW v1 .tap cassette image."""
-        self._pulse_raster_border("MASTERING .TAP CASSETTE IMAGE", 480)
-        self.action_assemble_prg()
-        if not self.last_prg_path or not self.last_prg_path.exists():
-            return
-        out_tap = (
-            self.loaded_file.with_suffix(".tap")
-            if (self.file_mode == "asm" and self.loaded_file)
-            else Path("./output.tap").resolve()
-        )
-        tape_name = self.loaded_file.stem if self.loaded_file else "OUTPUT"
-        try:
-            save_prg_to_tap(self.last_prg_path, tap_path=out_tap, tape_name=tape_name)
-            sz = out_tap.stat().st_size
-            self._write_log(f"✓ TAP Cassette Image Generated: {out_tap} ({sz} bytes)")
-            self.notify(f"EXPORTED {out_tap.name.upper()} ({sz} BYTES)")
-        except Exception as exc:
-            self._write_log(f"TAP Export Error: {exc}")
-            self.notify(f"TAP EXPORT ERROR: {exc}", severity="error")
+        """Build, then write a standard-speed .tap cassette image."""
+        def _export(prg: Path) -> None:
+            self._pulse_raster_border("MASTERING .TAP CASSETTE IMAGE", 480)
+            out_tap = prg.with_suffix(".tap")
+            try:
+                save_prg_to_tap(prg, tap_path=out_tap, tape_name=prg.stem)
+                sz = out_tap.stat().st_size
+                self._write_log(f"✓ TAP Cassette Image Generated: {out_tap} ({sz} bytes)")
+                self.notify(f"EXPORTED {out_tap.name.upper()} ({sz} BYTES)")
+            except Exception as exc:
+                self._write_log(f"TAP Export Error: {exc}")
+                self.notify(f"TAP EXPORT ERROR: {exc}", severity="error")
+
+        self._build_program(_export)
 
     def action_compile_d64(self) -> None:
-        """Assemble and package into a standard 35-track 1541 .d64 disk image."""
-        self._pulse_raster_border("FORMATTING & WRITING 1541 .D64 DISK", 500)
-        self.action_assemble_prg()
-        if not self.last_prg_path or not self.last_prg_path.exists():
-            return
-        out_d64 = (
-            self.loaded_file.with_suffix(".d64")
-            if (self.file_mode == "asm" and self.loaded_file)
-            else Path("./output.d64").resolve()
-        )
-        disk_name = (self.loaded_file.stem if self.loaded_file else "OUTPUT").upper()[:16]
-        try:
-            save_prg_to_d64(self.last_prg_path, d64_path=out_d64, disk_name=disk_name)
-            sz = out_d64.stat().st_size
-            self._write_log(f"✓ 1541 D64 Disk Image Generated: {out_d64} ({sz} bytes)")
-            self.notify(f"COMPILED {out_d64.name.upper()} ({sz} BYTES)")
-        except Exception as exc:
-            self._write_log(f"D64 Packaging Error: {exc}")
-            self.notify(f"D64 EXPORT ERROR: {exc}", severity="error")
+        """Build, then package into a standard 35-track 1541 .d64 disk image."""
+        def _export(prg: Path) -> None:
+            self._pulse_raster_border("FORMATTING & WRITING 1541 .D64 DISK", 500)
+            out_d64 = prg.with_suffix(".d64")
+            try:
+                save_prg_to_d64(prg, d64_path=out_d64, disk_name=prg.stem.upper()[:16])
+                sz = out_d64.stat().st_size
+                self._write_log(f"✓ 1541 D64 Disk Image Generated: {out_d64} ({sz} bytes)")
+                self.notify(f"COMPILED {out_d64.name.upper()} ({sz} BYTES)")
+            except Exception as exc:
+                self._write_log(f"D64 Packaging Error: {exc}")
+                self.notify(f"D64 EXPORT ERROR: {exc}", severity="error")
+
+        self._build_program(_export)
 
     def action_load_prg_only(self) -> None:
-        if not self.last_prg_path or not self.last_prg_path.exists():
-            self.action_assemble_prg()
-        if not self.last_prg_path or not self.last_prg_path.exists():
-            return
-        try:
-            res = self.client.load_prg(self.last_prg_path)
-            self._write_log(f"✓ PRG Loaded into C64 RAM: {res}")
-            self.notify("PRG LOADED INTO C64 RAM")
-        except Exception as exc:
-            self._write_log(f"DMA Load Error: {exc}")
-            self.notify(f"DMA LOAD FAILED: {exc}", severity="error")
+        """Build, then put the program in C64 RAM without starting it."""
+        def _load(prg: Path) -> None:
+            try:
+                res = self.client.load_prg(prg)
+                self._write_log(f"✓ PRG Loaded into C64 RAM: {res}")
+                self.notify("PRG LOADED INTO C64 RAM")
+            except Exception as exc:
+                self._write_log(f"DMA Load Error: {exc}")
+                self.notify(f"DMA LOAD FAILED: {exc}", severity="error")
+
+        self._build_program(_load)
 
     def action_refresh_connection(self) -> None:
         self._write_log(f"Checking connection to C64U at http://{self.client.host}:{self.client.port}...")
@@ -3715,8 +3702,8 @@ class C64PythonToAsmApp:
             idx = sel[0] if sel else 0
             if 0 <= idx < len(keys):
                 code = PRESETS[keys[idx]].get("code", "")
+                self._begin_load("python", None)
                 self.file_mode = "py"
-                self.loaded_file = None
                 self._set_python_text(str(code))
                 self._update_mode_badge()
                 self.action_transpile_code()
@@ -3810,29 +3797,37 @@ class C64PythonToAsmApp:
             "============================================================\n"
             "• Ctrl+E        : Toggle Full 6502 ASM IDE Focus vs Split View (Python + ASM)\n"
             "• Ctrl+N        : Create New 6502 KickAssembler (.asm) Starter Template\n"
-            "• Ctrl+S / ⇧F1  : Save Current 6502 Assembly Source\n"
+            "• Ctrl+S / ⇧F1  : Save the Loaded File\n"
             "• Ctrl+/        : Comment / Uncomment Selected 6502 Assembly Lines\n"
-            "• Ctrl+F / ^G   : Find Text, Label, or Jump to Line Number\n"
+            "• Ctrl+F        : Find Text, Label, or Jump to Line Number\n"
             "• Label Outline : Click any label/subroutine in the left outline to jump instantly\n\n"
-            "FUNCTION KEY & STUDIO SHORTCUTS\n"
+            "THE SEQUENCE\n"
             "============================================================\n"
-            "• F1            : Open Reference Guide & Credits\n"
-            "• F2            : Load Built-in C64 Preset Demos\n"
-            "• F3            : Open Project File Browser (.asm, .py, .d64, .tap, .prg, .sid)\n"
-            "• F4            : Refresh / Ping C64U Network Connection\n"
-            "• F5            : Assemble & DMA Run Immediately on C64U Hardware\n"
-            "• F6            : Transpile Python (6502 Dialect) to 6502 Assembly\n"
-            "• F7            : Assemble to C64 .PRG Binary (KickAssembler / ACME)\n"
-            "• F8            : Soft Reset C64U Machine\n"
-            "• F9            : Reverse-Decompile .D64 / .TAP / .PRG (with Copyright Notice)\n"
-            "• F10 / Alt+Key : Focus On-Screen Menu Bar (Navigate with Arrow Keys)\n"
-            "• F11           : Toggle Fullscreen C64 Monitor Mode\n"
-            "• Shift+F2 / ^T : Master & Export .TAP Cassette Tape Image\n"
-            "• Shift+F9 / ^M : Compile & Package 1541 .D64 Floppy Disk Image\n"
-            "• Ctrl+D/B/P    : Decompile SID (^D), Compile SID (^B), Play SID on C64U (^P)\n"
-            "• Alt+G         : Game Dev menu (tools from the repository's tools/ folder)\n"
-            + "".join(f"    {t.label:<16}: {t.describe}\n" for t in GAME_TOOLS.values())
-            + "    OPEN REVIEW     : Open a generated review page in your web browser\n"
+            "1. LOAD (F3)  : Any file goes on screen. Nothing runs yet.\n"
+            "2. BUILD (F7) : Saves the file and builds it the way its kind needs.\n"
+            "3. RUN (F5)   : Builds if needed and runs it. A song plays.\n"
+            "   EXPORT     : Shift+F2 .TAP, F12 HYPERLOAD .TAP, Shift+F9 .D64.\n\n"
+            "WHAT F7 DOES FOR EACH FILE\n"
+            "============================================================\n"
+            "• .asm            : Assembles it, or its whole game if it has a build.py\n"
+            "• .py game code   : Transpiles to 6502, then assembles\n"
+            "• build.py        : Runs every step of the game's build\n"
+            "• Sprites, tiles, screen, song, levels : Runs that file's tool\n"
+            "• .prg .tap .d64 .sid : Load shows the disassembly; a .prg or .sid runs as is\n\n"
+            "GAME DEV: START SOMETHING NEW (ALT+G)\n"
+            "============================================================\n"
+            "• GAME PROJECT : A new folder with a build.py and a program that runs\n"
+            "• BUILD.PY     : The folder's build.py, written from its files if it has none\n"
+            "• SPRITE BANK, TILES + MAP, TITLE SCREEN, SID SONG, LEVELS : A starter file\n"
+            "  that builds as it stands, added to the game's build.py\n"
+            "• C64 SCREEN   : Runs the program in the simulator and shows a screenshot\n"
+            "• SID PROFILE  : CPU time the music takes per frame\n\n"
+            "OTHER KEYS\n"
+            "============================================================\n"
+            "• F1 Guide   F2 Preset Demos   F4 Ping C64U   F6 Python to ASM   F8 Soft Reset\n"
+            "• F10 / Alt+Key : On-Screen Menu (Arrow Keys)   F11 Fullscreen\n"
+            "• Shift+F3 DMA Load   Shift+F4/F5 Pause/Resume   Shift+F6 Screen Dump\n"
+            "• Shift+F7 Cold Reboot   Ctrl+P Play SID   Shift+F8 / Ctrl+Q Quit\n"
         )
         help_box.insert("1.0", guide_content)
         help_box.configure(state="disabled")

@@ -9,7 +9,7 @@ games without an emulator or the real hardware:
     bitmap, 8 sprites with multicolor, expansion, MSB and background priority,
     border, fine scroll, VIC banks via $DD00), so raster splits and sprite
     multiplexers show up as they would on screen.
-  * Raster interrupts ($D012/$D019/$D01A), bad-line CPU stalls.
+  * Raster interrupts ($D012/$D019/$D01A), CPU stalls for bad lines and sprite data.
   * CIA 1 keyboard matrix and joystick port 2, driven by an input script.
   * Memory banking through $01. ROMs are not emulated: programs that bank the
     KERNAL out (and use $FFFE) run as-is; programs that stay on the KERNAL get
@@ -41,6 +41,7 @@ PALETTE = [
     (0x6C, 0x6C, 0x6C), (0x9A, 0xD2, 0x84), (0x6C, 0x5E, 0xB5), (0x95, 0x95, 0x95),
 ]
 CYCLES_PER_LINE = 63
+COL0_CYCLE = 16            # the cycle that draws the left edge of the 40-column window
 LINES = 312
 FIRST_LINE = 15            # first raster line in the screenshot (36 px of top border)
 IMG_W, IMG_H = 384, 272
@@ -64,6 +65,10 @@ PETSCII = {"space": 0x20, "return": 0x0D, "f1": 0x85}
 class C64(CPU):
     def __init__(self):
         super().__init__()
+        self.stalls = []
+        self.writes = []             # VIC writes the beam has not reached: (cycle, register, value)
+        self.beam_vic = bytearray(0x40)
+        self.line_cycle = 0          # absolute cycle this raster line began
         self.port = 0x37
         self.vic = bytearray(0x40)
         self.color = bytearray(0x400)
@@ -79,8 +84,13 @@ class C64(CPU):
         self.key_queue = []
         self.render = False
         self.image = None
-        self.vic[0x11] = 0x1B
-        self.vic[0x16] = 0xC8
+        self.tape = None             # pulse lengths in cycles, once play_tape is called
+        self.tape_pos = 0
+        self.tape_edge = None        # absolute cycle of the next edge while the motor runs
+        self.timer_a_end = None      # absolute cycle timer A runs out
+        self.cia1_flags = 0
+        self.vic[0x11] = self.beam_vic[0x11] = 0x1B
+        self.vic[0x16] = self.beam_vic[0x16] = 0xC8
 
     # ---- banking
     def io_visible(self):
@@ -112,10 +122,11 @@ class C64(CPU):
     def io_read(self, a):
         if a < 0xD400:
             r = a & 0x3F
+            # step() has counted the instruction by now, and a load reads on its last cycle
             if r == 0x11:
-                return (self.vic[0x11] & 0x7F) | ((self.raster & 0x100) >> 1)
+                return (self.vic[0x11] & 0x7F) | ((self.beam_line() & 0x100) >> 1)
             if r == 0x12:
-                return self.raster & 0xFF
+                return self.beam_line() & 0xFF
             if r == 0x19:
                 return self.vic[0x19] | (0x80 if self.vic[0x19] & self.vic[0x1A] & 0x0F else 0) | 0x70
             if r >= 0x2F:
@@ -138,7 +149,11 @@ class C64(CPU):
                         rows &= ~(1 << row)
                 return rows & 0xFF
             if r == 0x0D:
-                return 0
+                if self.tape is None:
+                    return 0
+                self.run_tape()
+                flags, self.cia1_flags = self.cia1_flags, 0
+                return flags
             return self.cia1[r]
         if a < 0xDE00:
             return self.cia2[a & 0x0F]
@@ -151,15 +166,55 @@ class C64(CPU):
                 self.vic[0x19] &= ~v & 0x0F
             elif r < 0x2F:
                 self.vic[r] = v
+                # step() has counted the instruction by now, and a store writes on its last cycle
+                self.writes.append((self.cycles - 1, r, v))
         elif a < 0xD800:
             if 0xD400 <= a <= 0xD418:
                 self.sid[a - 0xD400] = v
         elif a < 0xDC00:
             self.color[a & 0x3FF] = v & 0x0F
         elif a < 0xDD00:
-            self.cia1[a & 0x0F] = v
+            r = a & 0x0F
+            self.cia1[r] = v
+            if r == 0x0E and self.tape is not None:
+                self.run_tape()
+                # only the one-shot, force-load start that a tape loader uses
+                self.timer_a_end = self.cycles - 1 + (self.cia1[4] | self.cia1[5] << 8) if v & 1 else None
         elif a < 0xDE00:
             self.cia2[a & 0x0F] = v
+
+    # ---- tape: only timer A and the FLAG edge, enough for a polling loader
+    def play_tape(self, tap, skip=0):
+        """Start a .tap image playing, skip pulses in. The motor still follows bit 5 of $01."""
+        assert tap[:12] == b"C64-TAPE-RAW", "not a .tap image"
+        data, i, self.tape = tap[20:], 0, []
+        while i < len(data):
+            if data[i]:
+                self.tape.append(data[i] * 8)
+                i += 1
+            else:
+                self.tape.append(data[i + 1] | data[i + 2] << 8 | data[i + 3] << 16)
+                i += 4
+        self.tape_pos = skip
+
+    def run_tape(self):
+        now = self.cycles - 1
+        if self.timer_a_end is not None and now >= self.timer_a_end:
+            self.cia1_flags |= 1
+            self.timer_a_end = None
+        if self.port & 0x20:           # bit 5 set: motor off
+            self.tape_edge = None
+            return
+        if self.tape_edge is None and self.tape_pos < len(self.tape):
+            self.tape_edge = now + self.tape[self.tape_pos]
+        while self.tape_edge is not None and now >= self.tape_edge:
+            self.cia1_flags |= 0x10
+            self.tape_pos += 1
+            self.tape_edge = (self.tape_edge + self.tape[self.tape_pos]
+                              if self.tape_pos < len(self.tape) else None)
+
+    def beam_line(self):
+        return ((self.cycles - 1) // CYCLES_PER_LINE) % LINES
 
     def raster_compare(self):
         return self.vic[0x12] | ((self.vic[0x11] & 0x80) << 1)
@@ -207,13 +262,45 @@ class C64(CPU):
             line = (self.cycles // CYCLES_PER_LINE) % LINES
             while line != self.raster:
                 self.end_line()
+                self.line_cycle += CYCLES_PER_LINE
                 self.raster = (self.raster + 1) % LINES
                 if self.raster == self.raster_compare():
                     self.vic[0x19] |= 1
-                if self.badline():
-                    self.cycles += 40
+                self.stalls = self.line_stalls()
                 line = (self.cycles // CYCLES_PER_LINE) % LINES
+            # the VIC holds the CPU for bad lines and sprite data
+            pos = self.cycles % CYCLES_PER_LINE
+            for start, stop in self.stalls:
+                if start <= pos < stop:
+                    self.cycles += stop - pos
+                    break
         self.frame += 1
+
+    def sprite_on(self, s, r):
+        if not self.vic[0x15] >> s & 1:
+            return False
+        height = 42 if self.vic[0x17] >> s & 1 else 21
+        return (r - self.vic[1 + 2 * s] - 1) % LINES < height
+
+    def line_stalls(self):
+        """Cycles of this line (start, stop) when the CPU cannot start an instruction.
+
+        Sprites 3-7 fetch at the start of the line that shows them (cycles 1-10), sprites
+        0-2 at the end of the line before (58-63), each after 3 cycles of warning. A bad
+        line takes 15-54 with its warning from 12; 10 stands for "a store begun any later
+        cannot finish its reads". Instruction-level, so a good model, not a cycle-exact one.
+        """
+        r = self.raster
+        out = []
+        low = [s for s in range(3, 8) if self.sprite_on(s, r)]
+        if low:
+            out.append((max(0, 2 * low[0] - 9), 2 * low[-1] - 3))
+        if self.badline():
+            out.append((10, 55))
+        high = [s for s in range(3) if self.sprite_on(s, (r + 1) % LINES)]
+        if high:
+            out.append((55 + 2 * high[0], CYCLES_PER_LINE))
+        return out
 
     def badline(self):
         r = self.raster
@@ -230,11 +317,34 @@ class C64(CPU):
         return self.mem[b + off]
 
     def end_line(self):
-        if not self.render:
-            return
+        """Draw the finished line, splitting it wherever a register changed under the beam."""
         y = self.raster - FIRST_LINE
-        if not 0 <= y < IMG_H:
-            return
+        draw = self.render and 0 <= y < IMG_H
+        end = self.line_cycle + CYCLES_PER_LINE
+        now, later = [], []
+        for w in self.writes:
+            (now if w[0] < end else later).append(w)
+        self.writes = later
+        latest = self.vic
+        out = [0] * IMG_W
+        x0 = 0
+        for cycle, r, val in now:
+            # 8 pixels a cycle; a write before the left edge or after the right has no split
+            x = 32 + (cycle - self.line_cycle - COL0_CYCLE) * 8
+            if draw and x > x0:
+                x1 = min(x, IMG_W)
+                self.vic = self.beam_vic
+                out[x0:x1] = self.draw_line()[x0:x1]
+                x0 = x1
+            self.beam_vic[r] = val
+        if draw and x0 < IMG_W:
+            self.vic = self.beam_vic
+            out[x0:] = self.draw_line()[x0:]
+        self.vic = latest
+        if draw:
+            self.image[y] = out
+
+    def draw_line(self):
         v = self.vic
         border = v[0x20] & 15
         row = [border] * IMG_W
@@ -251,7 +361,7 @@ class C64(CPU):
                 row[x] = border
             for x in range(right, IMG_W):
                 row[x] = border
-        self.image[y] = row
+        return row
 
     def draw_background(self, row, fg, d011, d016, d018):
         v = self.vic

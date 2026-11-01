@@ -1,3 +1,5 @@
+import shutil
+import time
 import tkinter as tk
 import pytest
 from pathlib import Path
@@ -17,6 +19,7 @@ from c64u_bridge.themes import (
     get_asset_path,
 )
 from c64u_bridge.d64 import create_d64, read_d64
+from c64u_bridge.project import create_definition
 
 
 @pytest.fixture(scope="module")
@@ -105,11 +108,7 @@ def test_tui_app_mount_and_fullscreen_toggle(tk_app):
     """Verify main studio widgets mount properly and F11 fullscreen toggles cleanly."""
     app = tk_app
     assert app.py_text is not None
-    assert "while True:" in app.py_text.get("1.0", "end-1c")
-
     assert app.asm_text is not None
-    asm_content = app.asm_text.get("1.0", "end-1c")
-    assert "VIC_BORDER" in asm_content or "BasicUpstart2" in asm_content
 
     assert app.log_text is not None
     assert app.ast_listbox is not None
@@ -253,38 +252,36 @@ def test_refresh_connection_and_reset_actions(tk_app):
 
 def test_export_tap_and_compile_d64_bindings(tk_app):
     app = tk_app
-    assert any(b.key == "ctrl+t" and b.action == "export_tap" for b in app.BINDINGS)
     assert any(b.key == "shift+f2" and b.action == "export_tap" for b in app.BINDINGS)
     assert any(b.key == "shift+f9" and b.action == "compile_d64" for b in app.BINDINGS)
-    assert any(b.key == "ctrl+m" and b.action == "compile_d64" for b in app.BINDINGS)
+    assert any(b.key == "f12" and b.action == "export_hyperload" for b in app.BINDINGS)
+    assert app.root.bind("<F12>")
     assert "btn-export-d64" in app.menu_buttons
 
 
 def test_tiered_menu_bar_and_bindings(tk_app):
     app = tk_app
     assert app.menu_bar is not None
-    for col_id in ("col-file", "col-build", "col-device", "col-sid", "col-gamedev", "col-help"):
+    for col_id in ("col-file", "col-build", "col-device", "col-gamedev", "col-help"):
         assert col_id in app.col_frames
 
-    for hdr_id in ("menu-btn-file", "menu-btn-build", "menu-btn-device", "menu-btn-sid", "menu-btn-gamedev",
-                   "menu-btn-help"):
+    for hdr_id in ("menu-btn-file", "menu-btn-build", "menu-btn-device", "menu-btn-gamedev", "menu-btn-help"):
         assert hdr_id in app.col_headers
 
-    for btn_id in ("btn-gd-sprites", "btn-gd-tileset", "btn-gd-koala", "btn-gd-song", "btn-gd-build",
-                   "btn-gd-c64sim", "btn-gd-sim", "btn-gd-review"):
+    for btn_id in ("btn-gd-game", "btn-gd-build", "btn-gd-sprites", "btn-gd-tileset", "btn-gd-koala", "btn-gd-song",
+                   "btn-gd-levels", "btn-gd-c64sim", "btn-gd-sim"):
         assert btn_id in app.menu_columns["gamedev"], f"Missing game dev button {btn_id}"
 
     for btn_id in (
         "btn-open",
         "btn-new-asm",
         "btn-save",
-        "btn-decompile-disk",
         "btn-export-tap",
+        "btn-export-hyperload",
         "btn-export-d64",
         "btn-quit",
         "quick-btn-run",
-        "btn-transpile",
-        "btn-assemble",
+        "btn-build",
         "btn-load-prg",
         "btn-refresh",
         "quick-btn-reset",
@@ -292,8 +289,6 @@ def test_tiered_menu_bar_and_bindings(tk_app):
         "btn-resume-cpu",
         "btn-screen-dump",
         "btn-c64u-reboot",
-        "btn-decompile-sid",
-        "btn-compile-sid",
         "btn-play-sid",
         "btn-presets",
         "btn-help",
@@ -310,26 +305,23 @@ def test_tiered_menu_bar_and_bindings(tk_app):
     app.action_focus_submenu("device")
     assert app.focused_button_id == "btn-refresh"
 
-    app.action_focus_submenu("sid")
-    assert app.focused_button_id == "btn-decompile-sid"
-
     app.action_focus_submenu("help")
     assert app.focused_button_id == "btn-presets"
 
     app.navigate_menu_key("down")
     assert app.focused_button_id == "btn-help"
 
-    # Game Dev column sits between SID and Help
+    # Game Dev column sits between Device and Help
     app.action_focus_submenu("gamedev")
-    assert app.focused_button_id == "btn-gd-sprites"
+    assert app.focused_button_id == "btn-gd-game"
     app.navigate_menu_key("right")
     assert app.focused_button_id == "btn-presets"
     app.action_focus_submenu("gamedev")
     app.navigate_menu_key("left")
-    assert app.focused_button_id == "btn-decompile-sid"
+    assert app.focused_button_id == "btn-refresh"
 
-    # Check F1-F11 and Shift+F1-Shift+F9 key bindings
-    f_keys = [f"f{i}" for i in range(1, 12)]
+    # F9 is free: loading a file is how anything gets decompiled
+    f_keys = [f"f{i}" for i in range(1, 13) if i != 9]
     shift_f_keys = [f"shift+f{i}" for i in range(1, 10)]
     bound_keys = [b.key for b in app.BINDINGS]
 
@@ -478,3 +470,174 @@ def test_kickass_update_modal_ui(tk_app):
     app.root.update_idletasks()
     assert outcomes == [False]
 
+
+# ---------------------------------------------------------------- the sequence
+
+
+def _pump(app, done):
+    """Let a background build finish and its result reach the window."""
+    deadline = time.time() + 120
+
+    def check():
+        if done() or time.time() > deadline:
+            app.root.quit()
+        else:
+            app.root.after(30, check)
+
+    # background threads can only reach the window while its main loop runs
+    app.root.after(30, check)
+    app.root.mainloop()
+    assert done(), "the build did not finish"
+    app.root.update()
+
+
+def _log(app):
+    return app.log_text.get("1.0", "end-1c")
+
+
+def test_starts_blank_with_nothing_to_build(tk_app):
+    app = tk_app
+    assert app.py_text.get("1.0", "end-1c") == ""
+    assert app.asm_text.get("1.0", "end-1c") == ""
+    assert app.loaded_file is None
+    assert "NOTHING LOADED" in app.mode_badge_lbl.cget("text")
+    app.action_build()
+    app.action_run_c64u()
+    assert app.last_prg_path is None
+
+
+def test_loading_a_prg_shows_it_and_does_not_run_it(tk_app, tmp_path, monkeypatch):
+    app = tk_app
+    ran = []
+    monkeypatch.setattr(app.client, "run_prg", lambda p: ran.append(p))
+    prg = tmp_path / "game.prg"
+    prg.write_bytes(bytes([0x00, 0xC0, 0xA9, 0x01, 0x8D, 0x20, 0xD0, 0x60]))
+
+    app.load_project_file(prg)
+    app._last_caution_modal.proceed_btn.invoke()
+    app.root.update()
+
+    assert ran == []
+    assert "BasicUpstart" in app.asm_text.get("1.0", "end-1c") or "$C000" in app.asm_text.get("1.0", "end-1c")
+    assert app.binary_source == prg
+    # F5 runs the original, not a reassembly
+    app.action_run_c64u()
+    _pump(app, lambda: ran)
+    assert ran == [prg]
+    # and saving a disassembly never touches the binary
+    before = prg.read_bytes()
+    app.loaded_file = None if app.loaded_file == prg else app.loaded_file
+    app._save_loaded_file()
+    assert prg.read_bytes() == before
+
+
+def test_loading_a_definition_shows_it_without_transpiling(tk_app, tmp_path):
+    app = tk_app
+    bank = tmp_path / "bank.py"
+    create_definition("sprites", bank)
+    app.load_project_file(bank)
+    assert app.file_mode == "def"
+    assert app.file_kind == "sprites"
+    assert "GROUPS" in app.py_text.get("1.0", "end-1c")
+    assert app.asm_text.get("1.0", "end-1c") == ""
+    assert "SPRITE BANK" in app.left_title_lbl.cget("text")
+    assert "Error" not in _log(app)
+
+
+def test_f7_saves_the_edit_and_runs_the_right_tool(tk_app, tmp_path, monkeypatch):
+    app = tk_app
+    monkeypatch.setattr("c64u_bridge.tui.webbrowser.open", lambda *_: True)
+    level = tmp_path / "lv.py"
+    create_definition("levels", level)
+    app.load_project_file(level)
+    app.py_text.insert("end", "\n# edited\n")
+    app.action_build()
+    _pump(app, lambda: app.stage >= 2)
+    assert "# edited" in level.read_text(encoding="utf-8")
+    assert (tmp_path / "lv_levels.asm").is_file()
+
+
+@pytest.mark.skipif(shutil.which("java") is None, reason="KickAssembler needs Java")
+def test_new_game_builds_and_runs_from_its_build_py(tk_app, tmp_path, monkeypatch):
+    app = tk_app
+    monkeypatch.setattr("c64u_bridge.tui.default_target_dir", lambda: tmp_path)
+    ran = []
+    monkeypatch.setattr(app.client, "run_prg", lambda p: ran.append(p))
+
+    app._create_game("Space Race")
+    manifest = tmp_path / "space_race" / "build.py"
+    assert app.loaded_file == manifest
+    assert "STEPS" in app.py_text.get("1.0", "end-1c")
+
+    app.action_run_c64u()
+    _pump(app, lambda: ran)
+    assert ran == [tmp_path / "space_race" / "space_race.prg"]
+
+    # a program file in the game builds the game, and F12 still makes a tape from it
+    app.load_project_file(tmp_path / "space_race" / "space_race.asm")
+    assert app.file_mode == "asm"
+    app.stage = 1
+    app.action_export_hyperload()
+    _pump(app, lambda: (tmp_path / "space_race" / "space_race.tap").is_file())
+    assert (tmp_path / "space_race" / "space_race.tap").read_bytes()[:12] == b"C64-TAPE-RAW"
+
+
+@pytest.mark.skipif(shutil.which("java") is None, reason="KickAssembler needs Java")
+def test_new_definition_joins_the_game_it_is_created_in(tk_app, tmp_path, monkeypatch):
+    app = tk_app
+    monkeypatch.setattr("c64u_bridge.tui.default_target_dir", lambda: tmp_path)
+    monkeypatch.setattr("c64u_bridge.tui.webbrowser.open", lambda *_: True)
+    app._create_game("Pad")
+    folder = tmp_path / "pad"
+    app._create_definition("sprites", folder / "sprites" / "bank.py")
+    assert app.loaded_file == folder / "sprites" / "bank.py"
+    steps = (folder / "build.py").read_text(encoding="utf-8")
+    assert steps.index('("sprites", "sprites/bank.py")') < steps.index('("asm", "pad.asm")')
+
+    # F7 on the sprites builds the sprites; asking for a program builds the game
+    app.action_build()
+    _pump(app, lambda: (folder / "sprites" / "sprites.asm").is_file() and app.stage >= 2)
+    got = []
+    app._build_program(got.append)
+    _pump(app, lambda: got)
+    assert got == [folder / "pad.prg"]
+
+
+def test_build_file_written_for_a_folder_then_loaded(tk_app, tmp_path):
+    app = tk_app
+    create_definition("levels", tmp_path / "lv.py")
+    (tmp_path / "main.asm").write_text("BasicUpstart2(s)\ns: rts\n", encoding="utf-8")
+    app._create_build_file(tmp_path)
+    assert app.loaded_file == tmp_path / "build.py"
+    assert app.file_kind == "build"
+    text = app.py_text.get("1.0", "end-1c")
+    assert '("levels", "lv.py")' in text and '("asm", "main.asm")' in text
+
+
+def test_save_writes_what_is_loaded_and_asks_when_untitled(tk_app, tmp_path, monkeypatch):
+    app = tk_app
+    src = tmp_path / "tune.py"
+    create_definition("song", src)
+    app.load_project_file(src)
+    app.py_text.insert("end", "# mine\n")
+    app.action_save_file()
+    assert "# mine" in src.read_text(encoding="utf-8")
+
+    app.action_new_asm_template()
+    named = tmp_path / "fresh.asm"
+    monkeypatch.setattr("c64u_bridge.tui.filedialog.asksaveasfilename", lambda **_: str(named))
+    app.action_save_file()
+    assert app.loaded_file == named and "BasicUpstart2" in named.read_text(encoding="utf-8")
+
+
+def test_a_failed_dma_run_reports_its_error(tk_app, tmp_path, monkeypatch):
+    app = tk_app
+
+    def refuse(_p):
+        raise RuntimeError("no route to c64u")
+
+    monkeypatch.setattr(app.client, "run_prg", refuse)
+    prg = tmp_path / "x.prg"
+    prg.write_bytes(b"\x01\x08\x00")
+    app._dma_run(prg)
+    _pump(app, lambda: "no route to c64u" in _log(app))

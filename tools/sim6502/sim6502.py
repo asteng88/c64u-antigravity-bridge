@@ -148,7 +148,13 @@ class CPU:
         return ops
 
     def adc(self, v):
-        assert not self.d, "decimal mode not supported"
+        if self.d:           # BCD addition (flags as far as games rely on them)
+            lo = (self.a & 15) + (v & 15) + self.c
+            hi = (self.a >> 4) + (v >> 4) + (lo > 9)
+            lo = (lo + 6 if lo > 9 else lo) & 15
+            self.c = int(hi > 9)
+            self.a = self.nz(((hi + 6 if hi > 9 else hi) & 15) << 4 | lo)
+            return
         r = self.a + v + self.c
         self.v = int(((self.a ^ r) & (v ^ r) & 0x80) != 0)
         self.c = int(r > 0xFF)

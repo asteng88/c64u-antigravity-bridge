@@ -1,0 +1,34 @@
+{
+ "instruments": [
+  {
+   "name": "lead",
+   "ad": "$46",
+   "sr": "$98",
+   "steps": 1
+  },
+  {
+   "name": "minor",
+   "ad": "$28",
+   "sr": "$88",
+   "steps": 3
+  },
+  {
+   "name": "major",
+   "ad": "$28",
+   "sr": "$88",
+   "steps": 3
+  },
+  {
+   "name": "drum",
+   "ad": "$09",
+   "sr": "$00",
+   "steps": 6
+  },
+  {
+   "name": "roll",
+   "ad": "$03",
+   "sr": "$00",
+   "steps": 3
+  }
+ ]
+}

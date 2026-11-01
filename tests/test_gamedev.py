@@ -1,8 +1,11 @@
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from c64u_bridge import project
 from c64u_bridge.gamedev import GAME_TOOLS, run_tool, tool_command, tools_root
 
 ROOT = tools_root()
@@ -101,3 +104,256 @@ def test_build_tool_runs_steps_and_assembles(tmp_path):
     assert res.ok, res.output
     prg = res.first(".prg")
     assert prg == tmp_path / "main.prg" and prg.read_bytes()[:2] == b"\x01\x08"
+
+
+@pytest.mark.skipif(shutil.which("java") is None, reason="KickAssembler needs Java")
+def test_heliscape_builds_and_flies_in_the_simulator(tmp_path):
+    src = ROOT / "game_dev" / "Heliscape"
+    game = tmp_path / "game_dev" / "Heliscape"
+    shutil.copytree(src, game, ignore=shutil.ignore_patterns("__pycache__", "*.prg", "*.tap", "*.sym", "*.vs", "*.sid"))
+    # the game imports the shared SID driver by a path relative to the repository
+    shutil.copytree(ROOT / "tools" / "sid", tmp_path / "tools" / "sid", ignore=shutil.ignore_patterns("__pycache__"))
+    res = run_tool("build", game / "build.py")
+    assert res.ok, res.output
+    prg = game / "heliscape.prg"
+    script = tmp_path / "input.json"
+    # past the title and the briefing, then lift off and fly east
+    script.write_text(
+        '[{"frame":60,"joy":"fire","hold":3},{"frame":100,"joy":"fire","hold":3},'
+        '{"frame":130,"joy":"up","hold":40},{"frame":170,"joy":"right","hold":200}]', encoding="utf-8")
+    sim = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "c64sim" / "c64sim.py"), str(prg),
+         "--frames", "400", "--input", str(script), "--shot", "399"],
+        capture_output=True, text=True, timeout=300)
+    assert sim.returncode == 0, sim.stdout + sim.stderr
+    assert (game / "heliscape_f399.png").is_file()
+
+
+def test_level_tool_writes_tables_records_and_enforces_check(tmp_path):
+    level = tmp_path / "lv.py"
+    level.write_text(
+        'LEVELS = [{"hp": 1, "map": [5, 6]}, {"hp": 2, "map": [7]}]\n'
+        'TABLES = [("lv_hp", "hp")]\nRECORDS = [("lv_map", "map")]\n', encoding="utf-8")
+    res = run_tool("levels", level)
+    assert res.ok, res.output
+    asm = (tmp_path / "lv_levels.asm").read_text(encoding="utf-8")
+    assert ".const LEVEL_COUNT = 2" in asm and "lv_hp:" in asm and "lv_map_lo:" in asm and "lv_map_1:" in asm
+    assert res.first(".html") == tmp_path / "lv_levels_review.html"
+    level.write_text('LEVELS = [{"hp": 1}]\nTABLES = [("lv_hp", "hp")]\n'
+                     'def CHECK(levels):\n    assert False, "too easy"\n', encoding="utf-8")
+    assert not run_tool("levels", level).ok
+
+
+def test_heliscape_levels_get_harder_every_level():
+    # CHECK is what guarantees it; run_tool would fail the build otherwise
+    res = run_tool("levels", ROOT / "game_dev" / "Heliscape" / "map" / "heliscape_levels.py")
+    assert res.ok, res.output
+
+
+def test_c64sim_models_cpu_stalls_for_sprites_and_bad_lines():
+    sys.path.insert(0, str(ROOT / "tools" / "sim6502"))
+    sys.path.insert(0, str(ROOT / "tools" / "c64sim"))
+    import c64sim
+
+    m = c64sim.C64()
+    m.vic[0x11] = 0x1B
+    m.vic[0x15] = 0xFF
+    for s in range(8):
+        m.vic[1 + 2 * s] = 0
+    m.raster = 200              # no sprite here, not a bad line
+    assert m.line_stalls() == []
+    m.raster = 203              # a bad line: 203 & 7 == 3
+    assert m.line_stalls() == [(10, 55)]
+    m.vic[1] = 180              # sprite 0 shows on line 201: it fetches at the end of 200
+    m.raster = 200
+    assert m.line_stalls() == [(55, 63)]
+    m.vic[1] = 0
+    m.vic[1 + 2 * 7] = 180      # sprite 7 fetches at the start of the line that shows it
+    assert m.line_stalls() == [(5, 11)]
+
+
+def test_c64sim_draws_a_register_change_where_the_beam_was():
+    sys.path.insert(0, str(ROOT / "tools" / "sim6502"))
+    sys.path.insert(0, str(ROOT / "tools" / "c64sim"))
+    import c64sim
+
+    m = c64sim.C64()
+    m.render = True
+    m.image = [[0] * c64sim.IMG_W for _ in range(c64sim.IMG_H)]
+    m.raster = 100
+    m.line_cycle = 100 * c64sim.CYCLES_PER_LINE
+    m.beam_vic[0x11], m.beam_vic[0x16], m.beam_vic[0x21] = 0x1B, 0x08, 2
+    m.vic[0x11], m.vic[0x16] = 0x1B, 0x08
+    # a store landing on cycle 26 of the line: 10 cycles, 80 pixels into the window
+    m.cycles = m.line_cycle + 27
+    m.io_write(0xD021, 5)
+    m.end_line()
+    line = m.image[100 - c64sim.FIRST_LINE]
+    assert line[32 + 79] == 2
+    assert line[32 + 80] == 5
+    assert m.writes == []
+
+
+def _hyperload_tape(prg, name="TEST"):
+    sys.path.insert(0, str(ROOT / "tools" / "sim6502"))
+    sys.path.insert(0, str(ROOT / "tools" / "c64sim"))
+    sys.path.insert(0, str(ROOT / "tools" / "hyperload"))
+    import c64sim
+    import hyperload_tool as tape_tool
+
+    tap, boot, block, code, _ = tape_tool.build_tape(prg, name)
+    m = c64sim.C64()
+    m.mem[0x0351:0x0351 + len(code)] = code     # where LOAD leaves the header
+    m.mem[0x02A7:0x02A7 + len(block)] = block   # and the file
+    m.pc, m.sp, m.i = 0x0351, 0xF6, 0
+    m.play_tape(tap, boot)
+    return m, tap, boot, c64sim, tape_tool
+
+
+def test_hyperload_tape_loads_a_program_in_the_simulator():
+    # SYS 2064, then a program spanning three pages that stores a mark when it runs
+    data = bytes.fromhex("0b080a009e3230363400000000") + bytes(2)
+    data += bytes.fromhex("a92a8d0002") + b"\x4c\x15\x08" + bytes(range(256)) * 2 + b"end"
+    prg = b"\x01\x08" + data
+    m, _, _, _, _ = _hyperload_tape(prg)
+    for _ in range(400):
+        m.run_frame()
+        if m.mem[0x200] == 0x2A:
+            break
+    assert m.mem[0x200] == 0x2A, f"never started, pc=${m.pc:04X}"
+    assert bytes(m.mem[0x801:0x801 + len(data)]) == data
+    assert m.port & 0x20, "the motor should be off"
+    assert m.vic[0x11] & 0x10, "the screen should be back on"
+
+
+def test_hyperload_tape_stops_on_a_bad_checksum():
+    data = bytes.fromhex("0b080a009e3230363400000000") + bytes(2) + bytes.fromhex("4c1008") + bytes(500)
+    m, _, boot, _, tape_tool = _hyperload_tape(b"\x01\x08" + data)
+    # flip one bit in the second page
+    flip = boot + tape_tool.PILOT_BITS + 9 + (256 + 1 + 10) * 8
+    m.tape[flip] = (tape_tool.FAST_LONG if m.tape[flip] == tape_tool.FAST_SHORT * 8 else tape_tool.FAST_SHORT) * 8
+    for _ in range(300):
+        m.run_frame()
+    assert m.vic[0x20] & 15 == 2, "the screen should turn red"
+    assert m.port & 0x20, "the motor should be off"
+
+
+def test_hyperload_tape_boot_file_autostarts_through_the_idle_vector(tmp_path):
+    sys.path.insert(0, str(ROOT / "src"))
+    from c64u_bridge.tap import extract_tap_stages, read_tap_info
+
+    prg = tmp_path / "game.prg"
+    prg.write_bytes(b"\x01\x08" + bytes.fromhex("0b080a009e3230363400000000") + bytes(2) + bytes(600))
+    res = run_tool("hyperload", prg)
+    assert res.ok, res.output
+    tap = res.first(".tap").read_bytes()
+    assert read_tap_info(tap)["has_correct_size"]
+    boot = next(s for s in extract_tap_stages(tap) if s.load_address == 0x02A7)
+    idle = 2 + 0x0302 - 0x02A7
+    assert boot.prg_data[idle:idle + 2] == bytes([0x51, 0x03])     # $0302 -> the loader at $0351
+    assert boot.payload_size == 0x0304 - 0x02A7
+
+
+def test_hyperload_tape_refuses_programs_it_cannot_load(tmp_path):
+    prg = tmp_path / "high.prg"
+    prg.write_bytes(b"\x00\xc8" + bytes(0x1000))
+    assert not run_tool("hyperload", prg).ok
+
+
+def test_hyperload_writes_the_path_and_name_it_is_given(tmp_path):
+    prg = tmp_path / "game.prg"
+    prg.write_bytes(b"\x01\x08" + bytes.fromhex("0b080a009e3230363400000000") + bytes(2) + bytes(600))
+    out = tmp_path / "other.tap"
+    res = run_tool("hyperload", prg, args=("-o", str(out), "--name", "mygame"))
+    assert res.ok, res.output
+    assert out.is_file() and not prg.with_suffix(".tap").exists()
+    assert b"MYGAME" in _kernal_header(out.read_bytes())
+
+
+def _kernal_header(tap):
+    sys.path.insert(0, str(ROOT / "src"))
+    from c64u_bridge.tap import extract_tap_stages
+
+    return extract_tap_stages(tap)[0].name.upper().encode()
+
+
+# ---------------------------------------------------------------- projects
+
+
+@pytest.mark.parametrize("kind", ["sprites", "tileset", "koala", "levels"])
+def test_every_starter_file_is_recognised_and_builds(tmp_path, kind):
+    path = project.create_definition(kind, tmp_path / "first_try.py")
+    assert project.classify_file(path) == kind
+    res = run_tool(kind, path)
+    assert res.ok, res.output
+
+
+@pytest.mark.skipif(shutil.which("java") is None, reason="KickAssembler needs Java")
+def test_starter_song_builds_a_sid_that_plays(tmp_path):
+    path = project.create_definition("song", tmp_path / "first_song.py")
+    assert project.classify_file(path) == "song"
+    res = run_tool("song", path)
+    assert res.ok, res.output
+    assert res.first(".sid").read_bytes()[:4] == b"PSID"
+
+
+def test_classify_tells_definitions_from_game_code(tmp_path):
+    def kind_of(text):
+        return project.classify_source(text)
+
+    assert kind_of('STEPS = [("asm", "a.asm")]') == "build"
+    assert kind_of("import math\nborder_color(1)\n") == "python"
+    assert kind_of("this is ( not python") == "python"
+    for path, want in [("game_dev/Heliscape/build.py", "build"),
+                       ("game_dev/Heliscape/sprites/heliscape_sprites.py", "sprites"),
+                       ("game_dev/Heliscape/map/heliscape_map.py", "tileset"),
+                       ("game_dev/Heliscape/map/heliscape_levels.py", "levels"),
+                       ("game_dev/Heliscape/music/heliscape_theme.py", "song"),
+                       ("game_dev/Heliscape/heliscape.asm", "asm")]:
+        assert project.classify_file(ROOT / path) == want, path
+
+
+def test_find_manifest_looks_up_from_a_game_file_and_stops_at_game_dev():
+    src = ROOT / "game_dev" / "Heliscape" / "src" / "irq.asm"
+    assert project.find_manifest(src) == ROOT / "game_dev" / "Heliscape" / "build.py"
+    assert project.find_manifest(ROOT / "game_dev" / "loose.asm") is None
+
+
+def test_scan_finds_what_heliscape_really_builds():
+    steps = project.scan_steps(ROOT / "game_dev" / "Heliscape")
+    assert steps[-1] == ("asm", "heliscape.asm")
+    assert steps[0] == ("sprites", "sprites/heliscape_sprites.py")
+    assert ("levels", "map/heliscape_levels.py") in steps
+    assert sum(1 for tool, _ in steps if tool == "song") == 2
+
+
+def test_create_game_refuses_to_overwrite(tmp_path):
+    manifest = project.create_game("My Game!", tmp_path)
+    assert manifest == tmp_path / "my_game" / "build.py"
+    with pytest.raises(FileExistsError):
+        project.create_game("my game", tmp_path)
+    with pytest.raises(ValueError):
+        project.create_game("!!!", tmp_path)
+
+
+def test_create_definition_refuses_to_overwrite(tmp_path):
+    path = project.create_definition("levels", tmp_path / "a.py")
+    path.write_text("# mine", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        project.create_definition("levels", path)
+    assert path.read_text(encoding="utf-8") == "# mine"
+
+
+def test_create_manifest_keeps_an_existing_build_py(tmp_path):
+    (tmp_path / "build.py").write_text("# mine\nSTEPS = []\n", encoding="utf-8")
+    assert project.create_manifest(tmp_path).read_text(encoding="utf-8").startswith("# mine")
+
+
+def test_add_step_goes_before_assembly_and_only_once(tmp_path):
+    manifest = project.create_game("g", tmp_path)
+    target = manifest.parent / "music" / "s.py"
+    assert project.add_step(manifest, "song", target)
+    assert not project.add_step(manifest, "song", target)
+    text = manifest.read_text(encoding="utf-8")
+    assert text.count("music/s.py") == 1
+    assert text.index("music/s.py") < text.index('("asm", "g.asm")')
