@@ -24,6 +24,7 @@ KIND_LABELS = {
     "song": "SID SONG",
     "levels": "LEVEL TABLES",
     "python": "PYTHON SOURCE (MOS 6502 DIALECT)",
+    "c": "C / C++ SOURCE (OSCAR64 / CC65)",
     "asm": "6502 ASSEMBLY",
 }
 # where a new file of each kind goes inside a project
@@ -269,6 +270,8 @@ def classify_file(path: Path) -> str:
     ext = path.suffix.lower()
     if ext in (".asm", ".s"):
         return "asm"
+    if ext in (".c", ".cpp", ".cc", ".cxx", ".h"):
+        return "c"
     if ext != ".py":
         return ext.lstrip(".")
     try:

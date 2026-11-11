@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from .client import C64UClient, C64UClientError
 from .compiler import CrossCompiler
 from .screen import format_screen
+from .validation_report import DeploymentValidator
 
 
 def create_tool_definitions() -> List[Dict[str, Any]]:
@@ -21,19 +22,19 @@ def create_tool_definitions() -> List[Dict[str, Any]]:
     return [
         {
             "name": "c64_build_and_run",
-            "description": "Compiles 6502 assembly or C source code into a C64 PRG binary and executes it immediately on the Commodore 64 Ultimate (C64U) via DMA.",
+            "description": "Compiles 6502 assembly (.asm/.s), C/C++ (.c/.cpp via Oscar64 or CC65), or Python (.py) source code into a C64 PRG binary, executes it immediately on the Commodore 64 Ultimate (C64U) via DMA, and returns an Automated Deployment Validation Report.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "source_path": {
                         "type": "string",
-                        "description": "Absolute or relative path to the 6502 assembly (.asm/.s) or C source file."
+                        "description": "Absolute or relative path to the 6502 assembly (.asm/.s), C/C++ (.c/.cpp), or Python (.py) source file."
                     },
                     "assembler": {
                         "type": "string",
-                        "enum": ["auto", "kickass", "acme", "cc65"],
+                        "enum": ["auto", "kickass", "acme", "oscar64", "cc65"],
                         "default": "auto",
-                        "description": "Cross-assembler to invoke. Defaults to auto-detection based on file syntax."
+                        "description": "Cross-assembler or C compiler to invoke ('kickass', 'acme', 'oscar64', 'cc65', or 'auto'). Defaults to auto-detection based on file extension and syntax."
                     }
                 },
                 "required": ["source_path"]
@@ -206,9 +207,15 @@ def parse_address(addr_str: str) -> int:
 class MCPServerHandler:
     """Handles MCP tool invocations and state."""
 
-    def __init__(self, client: Optional[C64UClient] = None, compiler: Optional[CrossCompiler] = None):
+    def __init__(
+        self,
+        client: Optional[C64UClient] = None,
+        compiler: Optional[CrossCompiler] = None,
+        validator: Optional[DeploymentValidator] = None,
+    ):
         self.client = client or C64UClient()
         self.compiler = compiler or CrossCompiler()
+        self.validator = validator or DeploymentValidator()
 
     def execute_tool(self, name: str, args: Dict[str, Any]) -> str:
         """Route tool calls to appropriate backend methods."""
@@ -218,13 +225,35 @@ class MCPServerHandler:
                 assembler = args.get("assembler", "auto")
                 result = self.compiler.compile(src_path, assembler=assembler)
                 if not result.success:
-                    return f"❌ Compilation Failed:\n{result.error_message or result.stderr or result.stdout}"
+                    report = self.validator.validate_deployment(
+                        client=self.client,
+                        source_name=Path(src_path).name if src_path else "UNKNOWN",
+                        compilation_result=result,
+                        assembler_used=assembler,
+                        execution_mode="DMA_RUN",
+                        load_and_exec_success=False,
+                    )
+                    return (
+                        f"❌ Compilation Failed:\n{result.error_message or result.stderr or result.stdout}\n\n"
+                        f"{report.format_report(include_full_screen=False)}"
+                    )
 
                 res = self.client.run_prg(result.output_prg)
+                report = self.validator.validate_deployment(
+                    client=self.client,
+                    source_name=Path(src_path).name,
+                    prg_path=result.output_prg,
+                    compilation_result=result,
+                    assembler_used=assembler,
+                    execution_mode="DMA_RUN",
+                    load_and_exec_success=True,
+                    runner_response=str(res),
+                )
                 return (
                     f"✅ Successfully compiled {Path(src_path).name} to {result.output_prg.name} "
-                    f"and launched on C64U via DMA.\n"
-                    f"Runner Response: {res}"
+                    f"({report.prg_size_bytes} bytes) and launched on C64U via DMA.\n"
+                    f"Runner Response: {res}\n\n"
+                    f"{report.format_report(include_full_screen=True)}"
                 )
 
             elif name == "c64_run_binary":
@@ -232,7 +261,18 @@ class MCPServerHandler:
                 if not prg_path.exists():
                     return f"❌ File not found: {prg_path}"
                 res = self.client.run_prg(prg_path)
-                return f"✅ Executed {prg_path.name} on C64U via DMA: {res}"
+                report = self.validator.validate_deployment(
+                    client=self.client,
+                    source_name=prg_path.name,
+                    prg_path=prg_path,
+                    execution_mode="DMA_RUN",
+                    load_and_exec_success=True,
+                    runner_response=str(res),
+                )
+                return (
+                    f"✅ Executed {prg_path.name} on C64U via DMA: {res}\n\n"
+                    f"{report.format_report(include_full_screen=True)}"
+                )
 
             elif name == "c64_play_sid":
                 sid_path = Path(args.get("sid_path"))

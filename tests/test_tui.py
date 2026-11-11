@@ -641,3 +641,253 @@ def test_a_failed_dma_run_reports_its_error(tk_app, tmp_path, monkeypatch):
     prg.write_bytes(b"\x01\x08\x00")
     app._dma_run(prg)
     _pump(app, lambda: "no route to c64u" in _log(app))
+
+
+# ---------------------------------------------------------------- C64 Studio & Antigravity CLI
+
+
+def test_hub_launcher_and_sprite_studio_integration(tk_app, monkeypatch):
+    """Verify C64 Studio acts as the default platform hub and launches Sprite Studio & Validation Reports."""
+    from unittest.mock import patch
+    from c64u_bridge import cli
+
+    app = tk_app
+    assert "btn-sprite-studio" in app.menu_buttons
+    assert "btn-validation-rep" in app.menu_buttons
+
+    opened = []
+    monkeypatch.setattr("c64u_bridge.tui.webbrowser.open", lambda url, *_: opened.append(url))
+    app.action_open_sprite_studio()
+    assert len(opened) == 1
+    assert "sprite_studio.html" in opened[0]
+
+    with patch("c64u_bridge.c64_studio.main") as mock_studio_main:
+        cli.main([])
+        mock_studio_main.assert_called_once_with([])
+
+    for alias in ("c64-studio", "studio", "tui"):
+        with patch("c64u_bridge.c64_studio.main") as mock_alias_main:
+            cli.main([alias, "--no-boot"])
+            mock_alias_main.assert_called_once_with(["--no-boot"])
+
+    with patch("c64u_bridge.server.run_stdio_server") as mock_mcp:
+        cli.main(["mcp"])
+        mock_mcp.assert_called_once()
+
+
+def test_c64_studio_rename_and_multi_language_ide_modes(tk_app, tmp_path, monkeypatch):
+    """Verify C64 Studio rename, tui.py backwards compatibility, and ASM / C / Python IDE modes."""
+    from c64u_bridge import c64_studio, tui
+
+    assert c64_studio.C64StudioApp is tui.C64StudioApp
+    assert tui.C64PythonToAsmApp is c64_studio.C64StudioApp
+
+    app = tk_app
+    assert "C64 STUDIO" in app.root.title()
+    assert set(app.lang_buttons.keys()) == {"asm", "c", "py"}
+
+    # 1. Switch to C / Oscar64 mode and generate C template
+    app.action_select_language("c")
+    app.root.update_idletasks()
+    assert app.file_mode == "c"
+    assert app.agy_lang_var.get() == "c"
+    assert "C / C++ SOURCE" in app.left_title_lbl.cget("text")
+    assert "int main(void)" in app.py_text.get("1.0", "end-1c")
+
+    # Verify C syntax highlighting tags (opcode, directive, hardware) apply cleanly
+    assert len(app.py_text.tag_ranges("opcode")) > 0
+    assert len(app.py_text.tag_ranges("directive")) > 0
+    assert len(app.py_text.tag_ranges("hardware")) > 0
+
+    # Save C source in tmp_path
+    monkeypatch.chdir(tmp_path)
+    app.loaded_file = None
+    app.action_save_assembly()
+    saved_c = tmp_path / "output.c"
+    assert saved_c.is_file()
+    assert "int main(void)" in saved_c.read_text(encoding="utf-8")
+
+    # 2. Switch to 6502 Assembly mode and load ASM starter template
+    app.action_new_asm_template()
+    app.root.update_idletasks()
+    assert app.file_mode == "asm"
+    assert "BasicUpstart2(start)" in app.asm_text.get("1.0", "end-1c")
+
+    # 3. Switch to Python mode and load Python 6502 starter template
+    app.action_new_py_template()
+    app.root.update_idletasks()
+    assert app.file_mode == "py"
+    assert "C64 STUDIO" in app.py_text.get("1.0", "end-1c")
+    assert "sta $d020" in app.asm_text.get("1.0", "end-1c").lower()
+
+
+def test_agy_cli_connector_detection_install_mcp_and_prompt(tmp_path):
+    """Verify AgyCliConnector auto-detection, installer, MCP registration, and code block extraction."""
+    import io
+    from unittest.mock import MagicMock, patch
+    from c64u_bridge.agy_cli import (
+        AgyCliConnector,
+        build_c64_prompt,
+        classify_code_block,
+        extract_code_blocks,
+    )
+
+    p_asm = build_c64_prompt("make raster bars", language_mode="asm", current_code="* = $0810")
+    assert "KickAssembler" in p_asm
+    assert "```asm" in p_asm
+
+    p_c = build_c64_prompt("bounce a sprite", language_mode="c", current_code="int main(void) {}")
+    assert "Oscar64" in p_c
+    assert "```c" in p_c
+
+    p_py = build_c64_prompt("play sid tone", language_mode="py", current_code="border_color(0)")
+    assert "Python-to-6502" in p_py
+    assert "```python" in p_py
+
+    assert build_c64_prompt("/doctor", language_mode="asm") == "/doctor"
+
+    sample_md = (
+        "Here is your C64 program:\n"
+        "```bash\nirm https://antigravity.google/cli/install.ps1 | iex\n```\n"
+        "```c\n#include <stdint.h>\nint main(void) { *((volatile uint8_t*)0xD020) = 2; return 0; }\n```\n"
+    )
+    blocks = extract_code_blocks(sample_md, preferred_mode="asm")
+    assert len(blocks) == 1
+    assert blocks[0].studio_mode == "c"
+    assert "0xD020" in blocks[0].code
+    assert classify_code_block("", "BasicUpstart2(start)\nstart: lda #$01", "py") == "asm"
+
+    conn_missing = AgyCliConnector(agy_bin=str(tmp_path / "nonexistent_agy.exe"), workspace_dir=tmp_path)
+    with patch("shutil.which", return_value=None), patch.object(
+        AgyCliConnector, "candidate_binary_paths", return_value=[]
+    ):
+        st_missing = conn_missing.detect_cli()
+        assert st_missing.installed is False
+        assert "antigravity.google/cli/install" in st_missing.install_command
+
+    fake_agy = tmp_path / "agy.exe"
+    fake_agy.write_text("fake", encoding="utf-8")
+    conn_ok = AgyCliConnector(agy_bin=str(fake_agy), workspace_dir=tmp_path)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="1.5.2\n", stderr=""),
+            MagicMock(returncode=0, stdout="c64u-bridge: connected\n", stderr=""),
+        ]
+        st_ok = conn_ok.detect_cli()
+        assert st_ok.installed is True
+        assert st_ok.version == "1.5.2"
+        assert st_ok.mcp_configured is True
+
+    with patch("subprocess.run") as mock_mcp_run:
+        mock_mcp_run.return_value = MagicMock(returncode=0, stdout="Added stdio MCP server c64u-bridge", stderr="")
+        ok, msg = conn_ok.register_c64u_mcp(host="192.168.1.64", port=80)
+        assert ok is True
+        assert "c64u-bridge" in msg
+
+    fake_stdout = io.StringIO(
+        "Generating KickAssembler routine...\n"
+        "```asm\nBasicUpstart2(start)\n* = $0810\nstart:\n    inc $d020\n    jmp start\n```\n"
+    )
+    fake_stderr = io.StringIO("")
+    fake_proc = MagicMock()
+    fake_proc.stdout = fake_stdout
+    fake_proc.stderr = fake_stderr
+    fake_proc.wait.return_value = 0
+
+    streamed: list[str] = []
+    with patch("subprocess.Popen", return_value=fake_proc) as mock_popen:
+        res = conn_ok.run_prompt(
+            "flash the border",
+            language_mode="asm",
+            exec_mode="accept-edits",
+            continue_conversation=True,
+            on_line=streamed.append,
+        )
+        assert res.success is True
+        assert res.primary_code_block is not None
+        assert res.primary_code_block.studio_mode == "asm"
+        assert "inc $d020" in res.primary_code_block.code
+        assert any("Generating KickAssembler" in ln for ln in streamed)
+        called_cmd = mock_popen.call_args[0][0]
+        assert "--mode" in called_cmd
+        assert "--continue" in called_cmd
+        assert "-p" in called_cmd
+
+
+def test_c64_studio_agy_setup_modal_and_prompt_workflow(tk_app):
+    """Verify AgySetupModal walkthrough and live Antigravity CLI prompting inside C64 Studio."""
+    from unittest.mock import patch
+    from c64u_bridge.agy_cli import AgyPromptResult, AgyStatus, ExtractedCodeBlock
+    from c64u_bridge.c64_studio import AgySetupModal
+
+    app = tk_app
+
+    missing_status = AgyStatus(
+        installed=False,
+        install_command="irm https://antigravity.google/cli/install.ps1 | iex",
+        status_message="Antigravity CLI (agy) not detected on this system.",
+    )
+    with patch.object(app.agy, "detect_cli", return_value=missing_status):
+        app.agy_prompt_var.set("Write a C64 raster bar demo")
+        app.action_send_agy_prompt()
+        app.root.update_idletasks()
+
+        assert app._last_agy_modal is not None
+        modal_text = app._last_agy_modal.info_lbl.cget("text")
+        assert "STEP 1" in modal_text
+        assert "install.ps1" in modal_text
+        assert "AUTO-INSTALL AGY CLI" in app._last_agy_modal.install_btn.cget("text")
+
+        app._last_agy_modal.copy_btn.invoke()
+        assert "install.ps1" in app.root.clipboard_get()
+
+        app._last_agy_modal.close_btn.invoke()
+        app.root.update_idletasks()
+
+    installed_status = AgyStatus(
+        installed=True,
+        binary_path=Path("C:/Users/test/AppData/Local/agy/bin/agy.exe"),
+        version="1.5.2",
+        mcp_configured=True,
+        install_command="irm https://antigravity.google/cli/install.ps1 | iex",
+        status_message="Antigravity CLI v1.5.2 detected",
+    )
+    c_code = (
+        "#include <stdint.h>\n"
+        "int main(void) {\n"
+        "    *((volatile uint8_t*)0xD020) = 6;\n"
+        "    for (;;) {}\n"
+        "}\n"
+    )
+    mock_result = AgyPromptResult(
+        success=True,
+        response_text=f"Here is your Oscar64 C program:\n```c\n{c_code}```",
+        stderr="",
+        return_code=0,
+        command=["agy", "-p", "..."],
+        code_blocks=[ExtractedCodeBlock(language_tag="c", studio_mode="c", code=c_code)],
+    )
+
+    with patch.object(app.agy, "detect_cli", return_value=installed_status), patch.object(
+        app.agy, "run_prompt", return_value=mock_result
+    ) as mock_run_prompt:
+        app.action_select_language("c")
+        app.agy_auto_apply_var.set(True)
+        app.agy_prompt_var.set("Set the VIC-II border to blue in Oscar64 C")
+        app.action_send_agy_prompt()
+        app.root.update_idletasks()
+
+        mock_run_prompt.assert_called_once()
+        assert app.file_mode == "c"
+        assert "0xD020" in app.py_text.get("1.0", "end-1c")
+        assert "Extracted C code block" in app.agy_chat_text.get("1.0", "end-1c")
+        assert "v1.5.2" in app.btn_agy_status.cget("text")
+
+    modal_ok = AgySetupModal(app.agy, installed_status)
+    dlg_ok = modal_ok.show_tk(app)
+    app.root.update_idletasks()
+    assert dlg_ok.winfo_exists()
+    assert "UPDATE AGY CLI" in modal_ok.install_btn.cget("text")
+    modal_ok.close_btn.invoke()
+    app.root.update_idletasks()

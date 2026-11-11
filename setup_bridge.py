@@ -370,7 +370,7 @@ def save_configuration(
         "mcpServers": {
             "c64u-bridge": {
                 "command": "uv",
-                "args": ["run", "--no-sync", "--directory", str(project_root.resolve()), "c64u-bridge", "mcp"],
+                "args": ["run", "--no-sync", "--directory", str(project_root.resolve()), "c64u-mcp"],
                 "env": {
                     "C64U_HOST": host,
                     "C64U_PORT": str(port),

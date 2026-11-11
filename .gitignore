@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
+/build/
 develop-eggs/
 dist/
 downloads/
@@ -49,7 +49,10 @@ htmlcov/
 
 # Downloaded tools & archives (our own tools in tools/<subfolder>/ are tracked)
 tools/kickassembler/
+tools/oscar64/
 *.zip
+.c64u_validation/
+.c64u_last_deployment.json
 
 # Example programs and games
 example_games/

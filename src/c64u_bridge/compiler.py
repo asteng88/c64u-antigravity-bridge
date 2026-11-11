@@ -84,24 +84,48 @@ class CompilationResult:
 
 
 class CrossCompiler:
-    """Orchestrates cross-compilation for 6502 assembly and C targets."""
+    """Orchestrates cross-compilation for 6502 assembly and C/C++ targets (KickAssembler, ACME, Oscar64, CC65)."""
 
     def __init__(
         self,
         kickass_jar: Optional[str] = None,
         acme_bin: Optional[str] = None,
         cc65_bin: Optional[str] = None,
+        oscar64_bin: Optional[str] = None,
     ):
         detected_jar = find_default_kickass_jar()
         default_jar = str(detected_jar) if detected_jar else "KickAss.jar"
         self.kickass_jar = kickass_jar or os.getenv("KICKASS_JAR") or default_jar
         self.acme_bin = acme_bin or os.getenv("ACME_BIN", "acme")
         self.cc65_bin = cc65_bin or os.getenv("CC65_BIN", "cl65")
+        self.oscar64_bin = oscar64_bin or os.getenv("OSCAR64_BIN", "oscar64")
+
+    def _is_tool_available(self, tool_bin: str) -> bool:
+        """Return True if tool_bin is an existing file path or discoverable on PATH."""
+        return bool(Path(tool_bin).is_file() or shutil.which(tool_bin))
 
     def detect_assembler(self, source_path: Path) -> str:
-        """Infer best assembler based on file extension and content directives."""
+        """Infer best assembler or C/C++ compiler based on file extension and content directives."""
         suffix = source_path.suffix.lower()
+        if suffix in [".cpp", ".cc", ".cxx"]:
+            return "oscar64"
+
         if suffix in [".c", ".h"]:
+            try:
+                content = source_path.read_text(encoding="utf-8", errors="ignore")
+                if (
+                    "<c64/" in content
+                    or "#pragma compile" in content
+                    or "__striped" in content
+                    or "__hwinterrupt" in content
+                ):
+                    return "oscar64"
+                if "<cbm.h>" in content or "<conio.h>" in content:
+                    return "cc65"
+            except Exception:
+                pass
+            if self._is_tool_available(self.oscar64_bin):
+                return "oscar64"
             return "cc65"
         
         # Check source content for assembler-specific syntax
@@ -127,9 +151,9 @@ class CrossCompiler:
         Compile a source file into a C64 PRG.
         
         Args:
-            source_path: Path to source file (.asm, .s, .c).
+            source_path: Path to source file (.asm, .s, .c, .cpp).
             output_prg: Optional destination .prg path.
-            assembler: 'kickass', 'acme', 'cc65', or 'auto'.
+            assembler: 'kickass', 'acme', 'oscar64', 'cc65', or 'auto'.
             extra_flags: Additional compiler flags.
         """
         src = Path(source_path).resolve()
@@ -150,6 +174,8 @@ class CrossCompiler:
             return self._compile_kickass(src, out, flags)
         elif asm == "acme":
             return self._compile_acme(src, out, flags)
+        elif asm == "oscar64":
+            return self._compile_oscar64(src, out, flags)
         elif asm in ["cc65", "cl65"]:
             return self._compile_cc65(src, out, flags)
         else:
@@ -158,7 +184,7 @@ class CrossCompiler:
                 output_prg=None,
                 stdout="",
                 stderr="",
-                error_message=f"Unsupported assembler target: {asm}",
+                error_message=f"Unsupported assembler/compiler target: {asm}",
             )
 
     def _compile_kickass(self, src: Path, out: Path, flags: List[str]) -> CompilationResult:
@@ -234,6 +260,43 @@ class CrossCompiler:
                 stdout="",
                 stderr=str(e),
                 error_message=f"CC65 execution error: {e}",
+            )
+
+    def _compile_oscar64(self, src: Path, out: Path, flags: List[str]) -> CompilationResult:
+        """Invoke Oscar64 optimizing C99/C++ to 6502 machine code compiler."""
+        base_flags: List[str] = []
+        if not any(f.startswith("-O") for f in flags):
+            base_flags.append("-O2")
+        if not any(f.startswith("-tf=") for f in flags):
+            base_flags.append("-tf=prg")
+        if not any(f.startswith("-o=") for f in flags):
+            base_flags.append(f"-o={out}")
+
+        cmd = [self.oscar64_bin] + base_flags + flags + [str(src)]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, cwd=src.parent)
+            default_prg = src.with_suffix(".prg")
+            if res.returncode == 0 and not out.exists() and default_prg.exists() and default_prg != out:
+                shutil.move(str(default_prg), str(out))
+            sym_file = out.with_suffix(".lbl") if out.with_suffix(".lbl").exists() else None
+            return CompilationResult(
+                success=(res.returncode == 0 and out.exists()),
+                output_prg=out if out.exists() else None,
+                stdout=res.stdout,
+                stderr=res.stderr,
+                symbol_file=sym_file,
+                error_message=None if res.returncode == 0 else (res.stderr or res.stdout),
+            )
+        except Exception as e:
+            return CompilationResult(
+                success=False,
+                output_prg=None,
+                stdout="",
+                stderr=str(e),
+                error_message=(
+                    f"Oscar64 execution error ({self.oscar64_bin}): {e}. "
+                    "Ensure 'oscar64' is on PATH or set OSCAR64_BIN in .env."
+                ),
             )
 
     def compile_to_tap(

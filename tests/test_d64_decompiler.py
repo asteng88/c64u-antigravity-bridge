@@ -405,3 +405,150 @@ def test_kickassembler_version_check_and_updater(tmp_path):
     assert "5." in msg
 
 
+def test_automated_deployment_validation_report_and_diff(tmp_path):
+    """
+    Verify DeploymentValidator records compilation size, C64U firmware details,
+    load/exec status, Screen RAM snapshot, hardware register values, and diffs
+    between consecutive deployments.
+    """
+    from c64u_bridge.validation_report import DeploymentValidator
+
+    class _MockC64UClient:
+        host = "192.168.1.64"
+        port = 80
+
+        def __init__(self, border_col: int, screen_text: bytes):
+            self.border_col = border_col
+            self.screen_text = screen_text
+
+        def get_info(self):
+            return {"version": "3.11a", "product": "Ultimate-64", "fpga": "1.22"}
+
+        def read_memory(self, address: int, length: int) -> bytes:
+            if address == 0x0400:
+                buf = bytearray([0x20] * 1000)
+                buf[: len(self.screen_text)] = self.screen_text
+                return bytes(buf)
+            if address == 0xD800:
+                return bytes([0x01] * 1000)
+            if address == 0x0000:
+                return bytes([0x2F, 0x37])  # DDR=$2F, PORT=$37
+            if address == 0x0314:
+                return bytes([0x31, 0xEA, 0x66, 0xFE, 0x47, 0xFE])  # IRQ=$EA31
+            if address == 0xD011:
+                vic = bytearray(0x1E)
+                vic[0x00] = 0x1B  # $D011 Screen ON, Text
+                vic[0x04] = 0x03  # $D015 Sprites 0, 1 ON
+                vic[0x07] = 0x14  # $D018
+                vic[0x0F] = self.border_col  # $D020
+                vic[0x10] = 0x06  # $D021 Blue
+                return bytes(vic)
+            if address == 0xD400:
+                sid = bytearray(25)
+                sid[24] = 0x0F  # Volume 15
+                return bytes(sid)
+            if address == 0xDD00:
+                return bytes([0x03])  # Bank 0 ($0000-$3FFF)
+            return bytes(length)
+
+    state_file = tmp_path / "last_deploy.json"
+    validator = DeploymentValidator(state_file=state_file)
+
+    # Deployment #1: 10-byte PRG, Border = 14 (Light Blue), Screen Row 0 = "HELLO C64"
+    prg1 = tmp_path / "demo_v1.prg"
+    prg1.write_bytes(bytes([0x01, 0x08, 0xA9, 0x0E, 0x8D, 0x20, 0xD0, 0x60]))
+    # Screen codes for "HELLO": H=8, E=5, L=12, L=12, O=15
+    client1 = _MockC64UClient(border_col=0x0E, screen_text=bytes([8, 5, 12, 12, 15]))
+
+    rep1 = validator.validate_deployment(
+        client=client1,
+        source_name="demo_v1.asm",
+        prg_path=prg1,
+        execution_mode="DMA_RUN",
+        load_and_exec_success=True,
+        runner_response="OK",
+        settle_delay_sec=0.0,
+    )
+    txt1 = rep1.format_report()
+    assert rep1.compilation_success is True
+    assert rep1.prg_size_bytes == 8
+    assert rep1.load_address == 0x0801
+    assert rep1.c64u_connected is True
+    assert rep1.firmware_version == "3.11a"
+    assert rep1.load_and_exec_success is True
+    assert rep1.screen_captured is True
+    assert rep1.non_blank_chars == 5
+    assert "Light Blue" in rep1.registers["$D020/$D021 Colors"]
+    assert rep1.diff.has_previous is False
+    assert "Baseline deployment recorded" in txt1
+
+    # Deployment #2: 12-byte PRG (+4 bytes), Border = 0 (Black), Screen Row 0 = "READY"
+    prg2 = tmp_path / "demo_v2.prg"
+    prg2.write_bytes(bytes([0x01, 0x08, 0x78, 0xA9, 0x00, 0x8D, 0x20, 0xD0, 0x8D, 0x21, 0xD0, 0x60]))
+    # Screen codes for "READY": R=18, E=5, A=1, D=4, Y=25
+    client2 = _MockC64UClient(border_col=0x00, screen_text=bytes([18, 5, 1, 4, 25]))
+
+    rep2 = validator.validate_deployment(
+        client=client2,
+        source_name="demo_v2.asm",
+        prg_path=prg2,
+        execution_mode="DMA_RUN",
+        load_and_exec_success=True,
+        runner_response="OK",
+        settle_delay_sec=0.0,
+    )
+    txt2 = rep2.format_report()
+    assert rep2.diff.has_previous is True
+    assert rep2.diff.prg_size_delta == 4
+    assert rep2.diff.prg_hash_changed is True
+    assert any("Light Blue" in rc and "Black" in rc for rc in rep2.diff.register_changes)
+    assert rep2.diff.screen_Wait_cells_changed == 4  # H, L, L, O changed (E at index 1 stayed 5)
+    assert "Row 00: \"HELLO\" -> \"READY\"" in txt2
+
+
+def test_oscar64_compiler_detection_and_invocation(tmp_path):
+    """Verify Oscar64 C/C++ compiler detection and command-line orchestration."""
+    from unittest.mock import patch
+    from c64u_bridge.compiler import CrossCompiler
+
+    compiler = CrossCompiler(oscar64_bin="oscar64")
+
+    # 1. C++ files and C files with <c64/vic.h> or #pragma compile auto-select oscar64
+    c_oscar = tmp_path / "game_oscar.c"
+    c_oscar.write_text('#include <c64/vic.h>\nint main(void) { vic.color_border = VCOL_BLACK; return 0; }\n', encoding="utf-8")
+    assert compiler.detect_assembler(c_oscar) == "oscar64"
+
+    cpp_oscar = tmp_path / "engine.cpp"
+    cpp_oscar.write_text('int main() { return 0; }\n', encoding="utf-8")
+    assert compiler.detect_assembler(cpp_oscar) == "oscar64"
+
+    # 2. C files with <conio.h> / <cbm.h> auto-select cc65
+    c_cc65 = tmp_path / "legacy_cc65.c"
+    c_cc65.write_text('#include <conio.h>\nint main(void) { cputs("HI"); return 0; }\n', encoding="utf-8")
+    assert compiler.detect_assembler(c_cc65) == "cc65"
+
+    # 3. Mock subprocess.run for Oscar64 compilation to PRG
+    out_prg = tmp_path / "game_oscar.prg"
+
+    def _fake_oscar64_run(cmd, **kwargs):
+        assert "oscar64" in cmd[0]
+        assert "-tf=prg" in cmd
+        assert any(arg.startswith("-o=") for arg in cmd)
+        out_prg.write_bytes(bytes([0x01, 0x08, 0xA9, 0x00, 0x8D, 0x20, 0xD0, 0x60]))
+
+        class _Res:
+            returncode = 0
+            stdout = "Oscar64 C/C++ Compiler v1.30 - Compiled successfully"
+            stderr = ""
+
+        return _Res()
+
+    with patch("c64u_bridge.compiler.subprocess.run", side_effect=_fake_oscar64_run):
+        res = compiler.compile(c_oscar, output_prg=out_prg, assembler="auto")
+        assert res.success is True
+        assert res.output_prg == out_prg
+        assert out_prg.exists()
+
+
+
+
