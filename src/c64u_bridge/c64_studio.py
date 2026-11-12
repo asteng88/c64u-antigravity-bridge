@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import ast
 import ctypes
+import json
 import os
 import re
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from dataclasses import dataclass
@@ -40,8 +42,11 @@ from .agy_cli import (
     AgyPromptResult,
     AgyStatus,
     ExtractedCodeBlock,
+    extract_streaming_code_preview,
+    infer_prompt_language,
 )
 from .client import C64UClient
+from .server import get_studio_event_journal_path
 from .validation_report import DeploymentValidationReport, DeploymentValidator
 
 
@@ -1395,6 +1400,11 @@ class C64StudioApp:
         self.last_agy_code_block: Optional[ExtractedCodeBlock] = None
         self._last_agy_modal: Optional[AgySetupModal] = None
         self._agy_busy: bool = False
+        self._last_synced_editor_text: str = ""
+        self._workspace_watch_mtimes: dict[Path, tuple[int, int]] = {}
+        self._self_written_mtimes: dict[Path, int] = {}
+        self._studio_journal_offset: int = 0
+        self._ext_poll_counter: int = 0
 
         self.current_theme = "Commodore 64"
         self.last_asm: str = ""
@@ -1523,7 +1533,7 @@ class C64StudioApp:
 
         self.btn_asm_focus = tk.Button(
             self.header_right,
-            text="★ 6502 (^E)",
+            text="👁 SHOW ASM (^E)",
             command=self.action_toggle_asm_focus,
             relief=tk.FLAT,
             padx=5,
@@ -1707,30 +1717,109 @@ class C64StudioApp:
                 )
                 self.bridge_status_lbl.pack(fill=tk.X, side=tk.BOTTOM, pady=(2, 0))
 
-        # 4. Main Workspace Split Area (Left Column: Python + ASM Label Navigator | Right Column: 6502 ASM IDE & Tabs)
+        # 4. Unified Single-Screen Workspace (One Focused Editor + Toggleable 6502 ASM View)
         self.workspace_frame = tk.Frame(self.studio_frame)
         self.workspace_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=2)
-        self.workspace_frame.columnconfigure(0, weight=5)
-        self.workspace_frame.columnconfigure(1, weight=7)
+        self.workspace_frame.columnconfigure(0, weight=1)
         self.workspace_frame.rowconfigure(0, weight=1)
 
-        # --- LEFT COLUMN: Python 6502 Dialect Editor + ASM Label Outline ---
-        self.left_pane = tk.Frame(self.workspace_frame, highlightthickness=1, padx=6, pady=6)
-        self.left_pane.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        self.right_pane = tk.Frame(self.workspace_frame, highlightthickness=1, padx=6, pady=6)
+        self.right_pane.grid(row=0, column=0, sticky="nsew")
+        self.left_pane = self.right_pane  # Backwards-compatible alias for single-pane workspace
 
-        self.left_hdr_bar = tk.Frame(self.left_pane)
+        # Tab Selector Strip + Single-Screen ASM Toggle
+        self.tab_bar = tk.Frame(self.right_pane)
+        self.tab_bar.pack(fill=tk.X, pady=(0, 4))
+
+        self.tab_buttons: dict[str, tk.Button] = {}
+        for tab_id, tab_title in (
+            ("tab-asm", "1:EDITOR"),
+            ("tab-log", "2:LOG"),
+            ("tab-ast", "3:AST"),
+            ("tab-hw", "4:C64U"),
+            ("tab-agy", "5:AGY AI"),
+        ):
+            tb = tk.Button(
+                self.tab_bar,
+                text=tab_title,
+                command=lambda tid=tab_id: self.switch_tab(tid),
+                relief=tk.FLAT,
+                padx=6,
+                pady=3,
+                cursor="hand2",
+            )
+            tb.pack(side=tk.LEFT, padx=(0, 3))
+            self.tab_buttons[tab_id] = tb
+
+        self.btn_show_asm = tk.Button(
+            self.tab_bar,
+            text="👁 SHOW ASM [^E]",
+            command=self.action_toggle_asm_focus,
+            relief=tk.FLAT,
+            padx=8,
+            pady=3,
+            cursor="hand2",
+        )
+        self.btn_show_asm.pack(side=tk.RIGHT, padx=(6, 0))
+
+        self.mode_badge_lbl = tk.Label(
+            self.tab_bar,
+            text="[MODE: PYTHON → 6502]",
+            anchor="e",
+        )
+        self.mode_badge_lbl.pack(side=tk.RIGHT, padx=4)
+
+        # Tab Stack Container
+        self.tab_stack = tk.Frame(self.right_pane)
+        self.tab_stack.pack(fill=tk.BOTH, expand=True)
+
+        # --- TAB 1: UNIFIED SINGLE-SCREEN CODE EDITOR (PYTHON / C / DEF + TOGGLEABLE 6502 ASM) ---
+        self.pane_asm = tk.Frame(self.tab_stack)
+
+        # Live Antigravity CLI Activity Strip (visible only while AGY is actively generating)
+        self.agy_live_bar = tk.Frame(self.pane_asm, padx=8, pady=3, highlightthickness=1)
+        self.agy_live_lbl = tk.Label(
+            self.agy_live_bar,
+            text="⚡ ANTIGRAVITY AI READY",
+            anchor="w",
+        )
+        self.agy_live_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.btn_agy_live_log = tk.Button(
+            self.agy_live_bar,
+            text="5:AI CONSOLE",
+            command=lambda: self.switch_tab("tab-agy"),
+            relief=tk.FLAT,
+            padx=6,
+            pady=1,
+            cursor="hand2",
+        )
+        self.btn_agy_live_log.pack(side=tk.RIGHT, padx=(6, 0))
+
+        # Unified Active Editor Header Bar
+        self.left_hdr_bar = tk.Frame(self.pane_asm)
         self.left_hdr_bar.pack(fill=tk.X, pady=(0, 4))
 
         self.btn_py_to_asm = tk.Button(
             self.left_hdr_bar,
-            text="PY → ASM (F6)",
+            text="⚡ PY → ASM (F6)",
             command=self._on_left_build_clicked,
             relief=tk.FLAT,
-            padx=6,
+            padx=7,
             pady=2,
             cursor="hand2",
         )
         self.btn_py_to_asm.pack(side=tk.RIGHT, padx=(4, 0))
+
+        self.btn_new_asm_hdr = tk.Button(
+            self.left_hdr_bar,
+            text="+ .ASM",
+            command=self.action_new_asm_template,
+            relief=tk.FLAT,
+            padx=5,
+            pady=2,
+            cursor="hand2",
+        )
+        self.btn_new_asm_hdr.pack(side=tk.RIGHT, padx=2)
 
         self.btn_new_py = tk.Button(
             self.left_hdr_bar,
@@ -1761,13 +1850,66 @@ class C64StudioApp:
         )
         self.left_title_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Python Editor with Line Number Gutter
-        self.py_editor_container = tk.Frame(self.left_pane, highlightthickness=1)
+        # Mutually-Exclusive Editor Stack (shows ONE comfortable editor at 100% width)
+        self.editor_stack = tk.Frame(self.pane_asm)
+        self.editor_stack.pack(fill=tk.BOTH, expand=True)
+
+        self.find_var = tk.StringVar()
+
+        # --- VIEW A: Full-Screen Source Editor (Python / C / Game Dev Definitions) ---
+        self.source_view_frame = tk.Frame(self.editor_stack)
+
+        self.py_toolbar = tk.Frame(self.source_view_frame, pady=2)
+        self.py_toolbar.pack(fill=tk.X, pady=(0, 4))
+
+        self.btn_py_comment = tk.Button(
+            self.py_toolbar,
+            text="# / // COMMENT (^/)",
+            command=self.action_toggle_source_comment,
+            relief=tk.FLAT,
+            padx=6,
+            pady=2,
+            cursor="hand2",
+        )
+        self.btn_py_comment.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.py_find_lbl = tk.Label(self.py_toolbar, text="FIND/LINE:")
+        self.py_find_lbl.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.py_find_entry = tk.Entry(
+            self.py_toolbar,
+            textvariable=self.find_var,
+            width=18,
+            relief=tk.FLAT,
+            highlightthickness=1,
+        )
+        self.py_find_entry.pack(side=tk.LEFT, padx=(0, 4), ipady=2)
+        self.py_find_entry.bind("<Return>", self._on_find_or_goto)
+
+        self.btn_py_find_go = tk.Button(
+            self.py_toolbar,
+            text="GO",
+            command=self._on_find_or_goto,
+            relief=tk.FLAT,
+            padx=6,
+            pady=2,
+            cursor="hand2",
+        )
+        self.btn_py_find_go.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.py_cursor_lbl = tk.Label(
+            self.py_toolbar,
+            text="LN 1/1, COL 1",
+            anchor="e",
+        )
+        self.py_cursor_lbl.pack(side=tk.RIGHT, padx=4)
+
+        self.py_editor_container = tk.Frame(self.source_view_frame, highlightthickness=1)
         self.py_editor_container.pack(fill=tk.BOTH, expand=True)
 
         self.py_gutter = tk.Text(
             self.py_editor_container,
-            width=4,
+            width=5,
             padx=4,
             pady=6,
             takefocus=0,
@@ -1796,82 +1938,34 @@ class C64StudioApp:
         self.py_text.config(yscrollcommand=self._on_py_scroll)
         self.py_scroll.config(command=self._yview_py_both)
         self.py_text.bind("<KeyRelease>", self._on_py_changed)
-        self.py_text.bind("<ButtonRelease-1>", self._on_py_changed)
+        self.py_text.bind("<ButtonRelease-1>", self._on_py_cursor_move)
+        self.py_text.bind("<Control-slash>", lambda _e: self.action_toggle_source_comment())
 
-        # Quick 6502 Label & Subroutine Outline Box at bottom of Left Pane
-        self.label_nav_frame = tk.Frame(self.left_pane, highlightthickness=1)
-        self.label_nav_frame.pack(fill=tk.X, pady=(6, 0))
+        # --- VIEW B: Full-Screen 6502 Assembly Editor & Toggled ASM Inspector ---
+        self.asm_view_frame = tk.Frame(self.editor_stack)
 
-        self.label_nav_hdr = tk.Label(
-            self.label_nav_frame,
-            text="6502 ASM LABELS & SUBROUTINES (CLICK TO JUMP):",
-            anchor="w",
-        )
-        self.label_nav_hdr.pack(fill=tk.X)
-
-        nav_list_wrap = tk.Frame(self.label_nav_frame)
-        nav_list_wrap.pack(fill=tk.BOTH, expand=True)
-
-        self.label_listbox = tk.Listbox(
-            nav_list_wrap,
-            height=5,
-            relief=tk.FLAT,
-            highlightthickness=0,
-            activestyle="none",
-        )
-        self.label_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.label_listbox.bind("<<ListboxSelect>>", self._on_label_nav_selected)
-
-        self.label_scroll = tk.Scrollbar(nav_list_wrap, command=self.label_listbox.yview)
-        self.label_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.label_listbox.config(yscrollcommand=self.label_scroll.set)
-        self._label_line_map: list[int] = []
-
-        # --- RIGHT COLUMN: Primary 6502 Assembly Editor, Build Log, AST, Hardware ---
-        self.right_pane = tk.Frame(self.workspace_frame, highlightthickness=1, padx=6, pady=6)
-        self.right_pane.grid(row=0, column=1, sticky="nsew")
-
-        # Tab Selector Strip + ASM Toolbar
-        self.tab_bar = tk.Frame(self.right_pane)
-        self.tab_bar.pack(fill=tk.X, pady=(0, 4))
-
-        self.tab_buttons: dict[str, tk.Button] = {}
-        for tab_id, tab_title in (
-            ("tab-asm", "1:ASM"),
-            ("tab-log", "2:LOG"),
-            ("tab-ast", "3:AST"),
-            ("tab-hw", "4:C64U"),
-            ("tab-agy", "5:AGY AI"),
-        ):
-            tb = tk.Button(
-                self.tab_bar,
-                text=tab_title,
-                command=lambda tid=tab_id: self.switch_tab(tid),
-                relief=tk.FLAT,
-                padx=6,
-                pady=3,
-                cursor="hand2",
-            )
-            tb.pack(side=tk.LEFT, padx=(0, 3))
-            self.tab_buttons[tab_id] = tb
-
-        self.mode_badge_lbl = tk.Label(
-            self.tab_bar,
-            text="[MODE: PYTHON → 6502]",
-            anchor="e",
-        )
-        self.mode_badge_lbl.pack(side=tk.RIGHT, padx=4)
-
-        # Tab Stack Container
-        self.tab_stack = tk.Frame(self.right_pane)
-        self.tab_stack.pack(fill=tk.BOTH, expand=True)
-
-        # --- TAB 1: 6502 ASSEMBLY EDITOR (.ASM) ---
-        self.pane_asm = tk.Frame(self.tab_stack)
-
-        # ASM Editor Power Toolbar (New ASM, Save, Comment, Find/Goto, Cursor Line/Col)
-        self.asm_toolbar = tk.Frame(self.pane_asm, pady=2)
+        self.asm_toolbar = tk.Frame(self.asm_view_frame, pady=2)
         self.asm_toolbar.pack(fill=tk.X, pady=(0, 4))
+
+        self.btn_back_to_source = tk.Button(
+            self.asm_toolbar,
+            text="⬅ BACK TO EDITOR (^E)",
+            command=self.action_toggle_asm_focus,
+            relief=tk.FLAT,
+            padx=8,
+            pady=2,
+            cursor="hand2",
+        )
+
+        self.btn_promote_asm = tk.Button(
+            self.asm_toolbar,
+            text="✎ EDIT AS .ASM",
+            command=self.action_promote_to_asm,
+            relief=tk.FLAT,
+            padx=8,
+            pady=2,
+            cursor="hand2",
+        )
 
         self.btn_asm_comment = tk.Button(
             self.asm_toolbar,
@@ -1887,11 +1981,10 @@ class C64StudioApp:
         self.find_lbl = tk.Label(self.asm_toolbar, text="FIND/LINE:")
         self.find_lbl.pack(side=tk.LEFT, padx=(0, 4))
 
-        self.find_var = tk.StringVar()
         self.find_entry = tk.Entry(
             self.asm_toolbar,
             textvariable=self.find_var,
-            width=16,
+            width=18,
             relief=tk.FLAT,
             highlightthickness=1,
         )
@@ -1916,9 +2009,42 @@ class C64StudioApp:
         )
         self.asm_cursor_lbl.pack(side=tk.RIGHT, padx=4)
 
-        # ASM Editor with Line Number Gutter
-        self.asm_editor_container = tk.Frame(self.pane_asm, highlightthickness=1)
-        self.asm_editor_container.pack(fill=tk.BOTH, expand=True)
+        self.asm_body_frame = tk.Frame(self.asm_view_frame)
+        self.asm_body_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Compact 6502 Label & Subroutine Jump Sidebar inside the ASM View
+        self.label_nav_frame = tk.Frame(self.asm_body_frame, highlightthickness=1)
+        self.label_nav_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
+
+        self.label_nav_hdr = tk.Label(
+            self.label_nav_frame,
+            text="6502 LABELS (JUMP):",
+            anchor="w",
+        )
+        self.label_nav_hdr.pack(fill=tk.X)
+
+        nav_list_wrap = tk.Frame(self.label_nav_frame)
+        nav_list_wrap.pack(fill=tk.BOTH, expand=True)
+
+        self.label_listbox = tk.Listbox(
+            nav_list_wrap,
+            width=26,
+            height=18,
+            relief=tk.FLAT,
+            highlightthickness=0,
+            activestyle="none",
+        )
+        self.label_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.label_listbox.bind("<<ListboxSelect>>", self._on_label_nav_selected)
+
+        self.label_scroll = tk.Scrollbar(nav_list_wrap, command=self.label_listbox.yview)
+        self.label_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.label_listbox.config(yscrollcommand=self.label_scroll.set)
+        self._label_line_map: list[int] = []
+
+        # Full-Height 6502 ASM Editor with Line Number Gutter
+        self.asm_editor_container = tk.Frame(self.asm_body_frame, highlightthickness=1)
+        self.asm_editor_container.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.asm_gutter = tk.Text(
             self.asm_editor_container,
@@ -2099,7 +2225,9 @@ class C64StudioApp:
         self.agy_lbl_lang.pack(side=tk.LEFT, padx=(0, 4))
 
         self.agy_lang_var = tk.StringVar(value="py")
-        self.agy_lang_menu = tk.OptionMenu(self.agy_top_bar, self.agy_lang_var, "asm", "c", "py")
+        self.agy_lang_menu = tk.OptionMenu(
+            self.agy_top_bar, self.agy_lang_var, "asm", "c", "py", "def"
+        )
         self.agy_lang_menu.config(relief=tk.FLAT, highlightthickness=1, padx=4, pady=1)
         self.agy_lang_menu.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -2111,7 +2239,17 @@ class C64StudioApp:
             self.agy_top_bar, self.agy_mode_var, "accept-edits", "plan", "auto"
         )
         self.agy_mode_menu.config(relief=tk.FLAT, highlightthickness=1, padx=4, pady=1)
-        self.agy_mode_menu.pack(side=tk.LEFT, padx=(0, 8))
+        self.agy_mode_menu.pack(side=tk.LEFT, padx=(0, 6))
+
+        self.agy_lbl_effort = tk.Label(self.agy_top_bar, text="EFFORT:")
+        self.agy_lbl_effort.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.agy_effort_var = tk.StringVar(value="low")
+        self.agy_effort_menu = tk.OptionMenu(
+            self.agy_top_bar, self.agy_effort_var, "low", "medium", "high"
+        )
+        self.agy_effort_menu.config(relief=tk.FLAT, highlightthickness=1, padx=4, pady=1)
+        self.agy_effort_menu.pack(side=tk.LEFT, padx=(0, 6))
 
         self.agy_include_ctx_var = tk.BooleanVar(value=True)
         self.agy_chk_ctx = tk.Checkbutton(
@@ -2143,6 +2281,16 @@ class C64StudioApp:
         )
         self.agy_chk_apply.pack(side=tk.LEFT, padx=2)
 
+        self.agy_watch_cli_var = tk.BooleanVar(value=True)
+        self.agy_chk_watch = tk.Checkbutton(
+            self.agy_top_bar,
+            text="CLI SYNC",
+            variable=self.agy_watch_cli_var,
+            relief=tk.FLAT,
+            highlightthickness=0,
+        )
+        self.agy_chk_watch.pack(side=tk.LEFT, padx=2)
+
         self.btn_agy_setup_tab = tk.Button(
             self.agy_top_bar,
             text="⚙ AGY SETUP",
@@ -2153,6 +2301,17 @@ class C64StudioApp:
             cursor="hand2",
         )
         self.btn_agy_setup_tab.pack(side=tk.RIGHT, padx=2)
+
+        self.btn_agy_term = tk.Button(
+            self.agy_top_bar,
+            text="🖥 CLI TERM",
+            command=self.action_launch_agy_terminal,
+            relief=tk.FLAT,
+            padx=6,
+            pady=2,
+            cursor="hand2",
+        )
+        self.btn_agy_term.pack(side=tk.RIGHT, padx=2)
 
         self.btn_agy_clear = tk.Button(
             self.agy_top_bar,
@@ -2462,11 +2621,13 @@ class C64StudioApp:
         if not self.agy_chat_text.get("1.0", "end-1c").strip():
             self._write_agy_chat(
                 "*** C64 STUDIO // GOOGLE ANTIGRAVITY CLI (`agy`) AI ASSISTANT ***\n"
-                "• Select target language (ASM 6502, C / Oscar64, or Python) and type a prompt below!\n"
-                "• Example: \"Create a VIC-II raster bar demo with a 3-voice SID bassline\"\n"
+                "• Select target language (ASM 6502, C / Oscar64, Python, or Game Def) and type a prompt below!\n"
+                "• Live Streaming: Tokens, tool steps, and generated code stream into the IDE in real time.\n"
+                "• External CLI Sync: Run `agy` in any terminal (or click '🖥 CLI TERM') — workspace edits & MCP runs sync live!\n"
                 "• Press Shift+F12 (Alt+A) to jump to the prompt box, or Ctrl+K for guided CLI setup.\n"
                 "────────────────────────────────────────────────────────────────────────"
             )
+        self._init_external_cli_watch_state()
         self.check_agy_cli_startup()
         if getattr(self, "_in_mainloop", False):
             self.check_bridge_status()
@@ -2549,13 +2710,17 @@ class C64StudioApp:
             self.top_bar,
             self.header_right,
             self.workspace_frame,
-            self.left_pane,
-            self.left_hdr_bar,
             self.right_pane,
             self.tab_bar,
             self.tab_stack,
             self.pane_asm,
+            self.left_hdr_bar,
+            self.editor_stack,
+            self.source_view_frame,
+            self.py_toolbar,
+            self.asm_view_frame,
             self.asm_toolbar,
+            self.asm_body_frame,
             self.pane_log,
             self.pane_ast,
             self.pane_hw,
@@ -2570,8 +2735,10 @@ class C64StudioApp:
             highlightbackground=str(t["accent"]),
             highlightcolor=str(t["accent"]),
         )
-        self.left_pane.configure(highlightbackground=str(t["accent"]))
         self.right_pane.configure(highlightbackground=str(t["accent"]))
+        self.agy_live_bar.configure(bg=str(t["panel_bg"]), highlightbackground=str(t["accent_bright"]))
+        self.agy_live_lbl.configure(font=f_small, bg=str(t["panel_bg"]), fg=str(t["accent_bright"]))
+        self.btn_agy_live_log.configure(font=f_btn, bg=str(t["button_bg"]), fg=str(t["button_fg"]))
         self.agy_quick_bar.configure(bg=str(t["panel_bg"]), highlightbackground=str(t["accent"]))
         self.deck_frame.configure(highlightbackground=str(t["accent"]))
 
@@ -2584,11 +2751,6 @@ class C64StudioApp:
         self._update_language_button_styles()
         self._refresh_agy_badge(self.agy_status)
 
-        self.btn_asm_focus.configure(
-            font=f_btn,
-            bg=str(t["accent"]) if self.asm_focus_mode else str(t["panel_bg"]),
-            fg="#000000" if self.asm_focus_mode else str(t["accent"]),
-        )
         self.btn_fullscreen.configure(
             font=f_btn,
             bg=str(t["panel_bg"]),
@@ -2641,10 +2803,22 @@ class C64StudioApp:
             fg=str(t["accent"]),
         )
 
-        # Style Left Pane (Python + ASM Labels)
+        # Style Unified Single-Screen Editor Header & Source View
         self.left_title_lbl.configure(font=f_hdr, bg=str(t["panel_bg"]), fg=str(t["accent"]), padx=6, pady=2)
-        for lbtn in (self.btn_py_to_asm, self.btn_new_c, self.btn_new_py):
+        for lbtn in (self.btn_py_to_asm, self.btn_new_asm_hdr, self.btn_new_c, self.btn_new_py):
             lbtn.configure(font=f_btn, bg=str(t["button_bg"]), fg=str(t["button_fg"]))
+
+        for pbtn in (self.btn_py_comment, self.btn_py_find_go):
+            pbtn.configure(font=f_btn, bg=str(t["button_bg"]), fg=str(t["button_fg"]))
+        self.py_find_lbl.configure(font=f_small, bg=str(t["paper"]), fg=str(t["ink"]))
+        self.py_find_entry.configure(
+            font=f_small,
+            bg=str(t["input_bg"]),
+            fg=str(t["input_fg"]),
+            insertbackground=str(t["input_fg"]),
+            highlightbackground=str(t["accent"]),
+        )
+        self.py_cursor_lbl.configure(font=f_small, bg=str(t["panel_bg"]), fg=str(t["accent_bright"]), padx=6, pady=2)
 
         self.py_editor_container.configure(bg=str(t["editor_bg"]), highlightbackground=str(t["accent"]))
         self.py_gutter.configure(font=f_code, bg=str(t["gutter_bg"]), fg=str(t["gutter_fg"]))
@@ -2667,8 +2841,10 @@ class C64StudioApp:
             selectforeground=str(t["button_fg"]),
         )
 
-        # Style Right Pane & ASM Editor
+        # Style ASM View & Tabs
         self.mode_badge_lbl.configure(font=f_small, bg=str(t["paper"]), fg=str(t["accent"]))
+        self.btn_back_to_source.configure(font=f_btn, bg=str(t["accent"]), fg="#000000")
+        self.btn_promote_asm.configure(font=f_btn, bg=str(t["success"]), fg="#000000")
         for btn in (self.btn_asm_comment, self.btn_find_go, self.btn_clear_log):
             btn.configure(font=f_btn, bg=str(t["button_bg"]), fg=str(t["button_fg"]))
 
@@ -2726,16 +2902,16 @@ class C64StudioApp:
         # Style Antigravity AI Console & Quick Prompt Bar
         self.agy_top_bar.configure(bg=str(t["panel_bg"]), highlightbackground=str(t["accent"]))
         self.agy_chat_wrap.configure(bg=str(t["editor_bg"]), highlightbackground=str(t["accent"]))
-        for lbl in (self.agy_lbl_lang, self.agy_lbl_mode):
+        for lbl in (self.agy_lbl_lang, self.agy_lbl_mode, self.agy_lbl_effort):
             lbl.configure(font=f_small, bg=str(t["panel_bg"]), fg=str(t["accent"]))
-        for om in (self.agy_lang_menu, self.agy_mode_menu):
+        for om in (self.agy_lang_menu, self.agy_mode_menu, self.agy_effort_menu):
             om.configure(
                 font=f_small,
                 bg=str(t["button_bg"]),
                 fg=str(t["button_fg"]),
                 highlightbackground=str(t["accent"]),
             )
-        for chk in (self.agy_chk_ctx, self.agy_chk_cont, self.agy_chk_apply):
+        for chk in (self.agy_chk_ctx, self.agy_chk_cont, self.agy_chk_apply, self.agy_chk_watch):
             chk.configure(
                 font=f_small,
                 bg=str(t["panel_bg"]),
@@ -2752,6 +2928,7 @@ class C64StudioApp:
         )
         for abtn in (
             self.btn_agy_setup_tab,
+            self.btn_agy_term,
             self.btn_agy_clear,
             self.btn_agy_apply,
             self.btn_agy_quick_setup,
@@ -2779,9 +2956,89 @@ class C64StudioApp:
         self.prompt_lbl.configure(font=f_hdr, bg=str(t["paper"]), fg=str(t["ink"]))
         self.credits_hint_lbl.configure(font=f_small, bg=str(t["paper"]), fg=str(t["accent"]))
 
+        self._sync_editor_display()
         self._update_tab_button_styles()
         self._draw_border_and_divider()
         self._draw_bottom_deck()
+
+    def _is_asm_view_active(self) -> bool:
+        """Return True when the single-screen editor should display 6502 Assembly (`asm_view_frame`)."""
+        return self.file_mode == "asm" or bool(self.asm_focus_mode)
+
+    def _sync_editor_display(self) -> None:
+        """Ensure the single-screen workspace displays ONLY the active editor (or toggled ASM view)."""
+        t = THEMES[self.current_theme]
+        font_fam = str(t["font_family"])
+        f_btn = (font_fam, 8, "bold")
+        showing_asm = self._is_asm_view_active()
+
+        if showing_asm:
+            self.source_view_frame.pack_forget()
+            if self.asm_view_frame.winfo_manager() != "pack":
+                self.asm_view_frame.pack(fill=tk.BOTH, expand=True)
+            if self.file_mode != "asm":
+                back_lang = "C" if self.file_mode == "c" else ("DEF" if self.file_mode == "def" else "PYTHON")
+                self.btn_back_to_source.configure(text=f"⬅ BACK TO {back_lang} (^E)")
+                self.btn_back_to_source.pack_forget()
+                self.btn_promote_asm.pack_forget()
+                self.btn_back_to_source.pack(side=tk.LEFT, padx=(0, 6), before=self.btn_asm_comment)
+                self.btn_promote_asm.pack(side=tk.LEFT, padx=(0, 8), before=self.btn_asm_comment)
+            else:
+                self.btn_back_to_source.pack_forget()
+                self.btn_promote_asm.pack_forget()
+        else:
+            self.asm_view_frame.pack_forget()
+            if self.source_view_frame.winfo_manager() != "pack":
+                self.source_view_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Sync the Show/Hide ASM toggle buttons in both the workspace bar and top header
+        if self.file_mode == "asm":
+            show_lbl = "★ 6502 ASM ACTIVE"
+            top_lbl = "★ 6502 ASM (^E)"
+            is_toggled = True
+        elif self.asm_focus_mode:
+            back_lang = "C" if self.file_mode == "c" else ("DEF" if self.file_mode == "def" else "PYTHON")
+            show_lbl = f"👁 HIDE ASM → {back_lang} [^E]"
+            top_lbl = "👁 HIDE ASM (^E)"
+            is_toggled = True
+        else:
+            show_lbl = "👁 SHOW ASM [^E]"
+            top_lbl = "👁 SHOW ASM (^E)"
+            is_toggled = False
+
+        for toggle_btn, txt_val in ((self.btn_show_asm, show_lbl), (self.btn_asm_focus, top_lbl)):
+            toggle_btn.configure(
+                text=txt_val,
+                font=f_btn,
+                bg=str(t["accent"]) if is_toggled else str(t["panel_bg"]),
+                fg="#000000" if is_toggled else str(t["accent_bright"]),
+            )
+
+        # Keep Tab 1 title crystal-clear about which single editor is active
+        if "tab-asm" in self.tab_buttons:
+            if self.file_mode == "asm":
+                tab1_lbl = "1:EDITOR [ASM]"
+            elif self.asm_focus_mode:
+                tab1_lbl = "1:ASM VIEW"
+            elif self.file_mode == "c":
+                tab1_lbl = "1:EDITOR [C]"
+            elif self.file_mode == "def":
+                tab1_lbl = "1:EDITOR [DEF]"
+            else:
+                tab1_lbl = "1:EDITOR [PY]"
+            self.tab_buttons["tab-asm"].configure(text=tab1_lbl)
+
+    def _set_agy_live_banner(self, visible: bool, message: str = "") -> None:
+        """Show or hide the live Antigravity CLI status strip above the single editor."""
+        if not self.root.winfo_exists():
+            return
+        if visible:
+            if message:
+                self.agy_live_lbl.configure(text=message)
+            if self.agy_live_bar.winfo_manager() != "pack":
+                self.agy_live_bar.pack(fill=tk.X, pady=(0, 4), before=self.left_hdr_bar)
+        else:
+            self.agy_live_bar.pack_forget()
 
     def _update_tab_button_styles(self) -> None:
         t = THEMES[self.current_theme]
@@ -2795,10 +3052,13 @@ class C64StudioApp:
             )
 
     def switch_tab(self, tab_id: str) -> None:
+        if tab_id == "tab-editor":
+            tab_id = "tab-asm"
         self._active_tab = tab_id
         for pane in (self.pane_asm, self.pane_log, self.pane_ast, self.pane_hw, self.pane_agy):
             pane.pack_forget()
         if tab_id == "tab-asm":
+            self._sync_editor_display()
             self.pane_asm.pack(fill=tk.BOTH, expand=True)
         elif tab_id == "tab-log":
             self.pane_log.pack(fill=tk.BOTH, expand=True)
@@ -2942,7 +3202,7 @@ class C64StudioApp:
                         self.py_text.tag_add(tag, *spans[i : i + 2000])
 
         line_count = max(1, text.count("\n") + 1)
-        gutter_str = "\n".join(f"{i:3d}" for i in range(1, line_count + 1))
+        gutter_str = "\n".join(f"{i:4d}" for i in range(1, line_count + 1))
         self.py_gutter.configure(state="normal")
         self.py_gutter.delete("1.0", tk.END)
         self.py_gutter.insert("1.0", gutter_str)
@@ -2980,6 +3240,16 @@ class C64StudioApp:
 
     def _on_py_changed(self, _event=None) -> None:
         self._highlight_py_editor()
+        self._on_py_cursor_move()
+
+    def _on_py_cursor_move(self, _event=None) -> None:
+        try:
+            idx = self.py_text.index(tk.INSERT)
+            ln, col = idx.split(".")
+            total_lines = int(self.py_text.index("end-1c").split(".")[0])
+            self.py_cursor_lbl.configure(text=f"LN {ln}/{total_lines}, COL {int(col) + 1}")
+        except Exception:
+            pass
 
     def _on_asm_return_autoindent(self, _event=None) -> str:
         """Smart 6502 assembly auto-indent on Enter."""
@@ -3002,6 +3272,8 @@ class C64StudioApp:
         idx = sel[0]
         if 0 <= idx < len(self._label_line_map):
             line_no = self._label_line_map[idx]
+            if self.file_mode != "asm":
+                self.asm_focus_mode = True
             self.switch_tab("tab-asm")
             target = f"{line_no}.0"
             self.asm_text.mark_set(tk.INSERT, target)
@@ -3014,33 +3286,62 @@ class C64StudioApp:
         if not query:
             return
         self.switch_tab("tab-asm")
-        self.asm_text.tag_remove("find_match", "1.0", tk.END)
+        in_asm = self._is_asm_view_active()
+        widget = self.asm_text if in_asm else self.py_text
+        cursor_cb = self._on_asm_cursor_move if in_asm else self._on_py_cursor_move
+        widget.tag_remove("find_match", "1.0", tk.END)
 
         # If numeric, jump to line number
         if query.isdigit():
             line_no = max(1, int(query))
             target = f"{line_no}.0"
-            self.asm_text.mark_set(tk.INSERT, target)
-            self.asm_text.see(target)
-            self.asm_text.tag_add("find_match", target, f"{line_no}.end")
-            self.asm_text.focus_set()
-            self._on_asm_cursor_move()
+            widget.mark_set(tk.INSERT, target)
+            widget.see(target)
+            widget.tag_add("find_match", target, f"{line_no}.end")
+            widget.focus_set()
+            cursor_cb()
             return
 
         # Otherwise search text from current cursor position (wrapping around)
-        start_pos = self.asm_text.index(f"{tk.INSERT}+1c")
-        pos = self.asm_text.search(query, start_pos, stopindex=tk.END, nocase=True)
+        start_pos = widget.index(f"{tk.INSERT}+1c")
+        pos = widget.search(query, start_pos, stopindex=tk.END, nocase=True)
         if not pos:
-            pos = self.asm_text.search(query, "1.0", stopindex=tk.END, nocase=True)
+            pos = widget.search(query, "1.0", stopindex=tk.END, nocase=True)
         if pos:
             end_pos = f"{pos}+{len(query)}c"
-            self.asm_text.tag_add("find_match", pos, end_pos)
-            self.asm_text.mark_set(tk.INSERT, pos)
-            self.asm_text.see(pos)
-            self.asm_text.focus_set()
-            self._on_asm_cursor_move()
+            widget.tag_add("find_match", pos, end_pos)
+            widget.mark_set(tk.INSERT, pos)
+            widget.see(pos)
+            widget.focus_set()
+            cursor_cb()
         else:
-            self.notify(f'"{query}" NOT FOUND IN ASM', severity="warning")
+            self.notify(f'"{query}" NOT FOUND IN EDITOR', severity="warning")
+
+    def action_toggle_source_comment(self) -> str:
+        """Toggle `# ` (Python) or `// ` (C) comment prefix on selected lines in the source editor."""
+        prefix = "//" if self.file_mode == "c" else "#"
+        try:
+            start_ln = int(self.py_text.index("sel.first").split(".")[0])
+            end_ln = int(self.py_text.index("sel.last").split(".")[0])
+        except tk.TclError:
+            start_ln = int(self.py_text.index(tk.INSERT).split(".")[0])
+            end_ln = start_ln
+
+        for ln in range(start_ln, end_ln + 1):
+            line_txt = self.py_text.get(f"{ln}.0", f"{ln}.end")
+            stripped = line_txt.lstrip()
+            leading = line_txt[: len(line_txt) - len(stripped)]
+            if stripped.startswith(f"{prefix} "):
+                new_line = leading + stripped[len(prefix) + 1 :]
+            elif stripped.startswith(prefix):
+                new_line = leading + stripped[len(prefix) :]
+            else:
+                new_line = f"{leading}{prefix} {stripped}"
+            self.py_text.delete(f"{ln}.0", f"{ln}.end")
+            self.py_text.insert(f"{ln}.0", new_line)
+
+        self._highlight_py_editor()
+        return "break"
 
     def action_toggle_asm_comment(self) -> str:
         """Toggle `// ` comment prefix on the current line or selected lines in the 6502 ASM editor."""
@@ -3068,58 +3369,90 @@ class C64StudioApp:
         return "break"
 
     def action_new_asm_template(self) -> None:
-        """Load a clean KickAssembler 6502 starter template into the ASM editor."""
+        """Load a clean KickAssembler 6502 starter template into the single-screen editor."""
         self._begin_load("asm", None)
         self.file_mode = "asm"
+        self.asm_focus_mode = False
+        self.agy_lang_var.set("asm")
         self.last_asm = NEW_ASM_TEMPLATE
         self._set_asm_text(NEW_ASM_TEMPLATE)
+        self._mark_editor_synced()
         self.switch_tab("tab-asm")
         self._update_mode_badge()
-        self._write_log("✓ Created new 6502 KickAssembler template in ASM Editor.")
+        self._write_log("✓ Created new 6502 KickAssembler template in editor.")
         self.notify("NEW 6502 .ASM TEMPLATE READY")
 
     def action_new_c_template(self) -> None:
         """Switch to C/C++ (Oscar64 / CC65) mode and load a clean C64 starter template."""
-        if self.asm_focus_mode:
-            self.action_toggle_asm_focus()
         self._begin_load("c", None)
         self.file_mode = "c"
+        self.asm_focus_mode = False
+        self.agy_lang_var.set("c")
         self._set_python_text(NEW_C_TEMPLATE)
+        self._set_asm_text("")
+        self.last_asm = ""
+        self._mark_editor_synced()
+        self.switch_tab("tab-asm")
         self._update_mode_badge()
-        self._write_log("✓ Created new C64 C99 (Oscar64 / CC65) template in LHS Editor.")
+        self._write_log("✓ Created new C64 C99 (Oscar64 / CC65) template in editor.")
         self.notify("NEW C64 .C (OSCAR64) TEMPLATE READY")
 
     def action_new_py_template(self) -> None:
         """Switch to Python-to-6502 mode and load a clean bare-metal Python template."""
-        if self.asm_focus_mode:
-            self.action_toggle_asm_focus()
         self._begin_load("python", None)
         self.file_mode = "py"
+        self.asm_focus_mode = False
+        self.agy_lang_var.set("py")
         self._set_python_text(NEW_PY_TEMPLATE)
+        self._mark_editor_synced()
         self.action_transpile_code(silent=True)
+        self.switch_tab("tab-asm")
         self._update_mode_badge()
-        self._write_log("✓ Created new Python-to-6502 template in LHS Editor.")
+        self._write_log("✓ Created new Python-to-6502 template in editor.")
         self.notify("NEW C64 .PY TEMPLATE READY")
 
+    def action_promote_to_asm(self) -> None:
+        """Convert the currently generated 6502 Assembly into the primary editable .ASM source."""
+        if self.file_mode == "py" and not self.asm_text.get("1.0", "end-1c").strip():
+            self.action_transpile_code(silent=True)
+        asm_code = self.asm_text.get("1.0", "end-1c")
+        if not asm_code.strip():
+            self.notify("NO 6502 ASM GENERATED YET — BUILD OR TRANSPILE FIRST", severity="warning")
+            return
+        self._begin_load("asm", None)
+        self.file_mode = "asm"
+        self.asm_focus_mode = False
+        self.agy_lang_var.set("asm")
+        self.last_asm = asm_code
+        self._set_asm_text(asm_code)
+        self._mark_editor_synced()
+        self.switch_tab("tab-asm")
+        self._update_mode_badge()
+        self.asm_text.focus_set()
+        self._write_log("✓ Promoted generated 6502 Assembly to primary editable .ASM buffer.")
+        self.notify("EDITING CONVERTED 6502 .ASM DIRECTLY")
+
     def action_select_language(self, lang: str) -> None:
-        """Switch active C64 Studio IDE language between 'asm', 'c', and 'py'."""
+        """Switch active C64 Studio single-screen editor language between 'asm', 'c', and 'py'."""
         norm = lang.lower().strip()
         if norm not in {"asm", "c", "py"}:
             return
+        prev_mode = self.file_mode
         self.file_mode = norm
+        self.asm_focus_mode = False
         self.agy_lang_var.set(norm)
         if norm == "asm":
+            if prev_mode == "py" and self.py_text.get("1.0", "end-1c").strip():
+                self.action_transpile_code(silent=True)
             self.file_kind = "asm"
-            self.switch_tab("tab-asm")
             if not self.asm_text.get("1.0", "end-1c").strip():
                 self._begin_load("asm", None)
                 self.file_mode = "asm"
                 self.last_asm = NEW_ASM_TEMPLATE
                 self._set_asm_text(NEW_ASM_TEMPLATE)
+            self.switch_tab("tab-asm")
             self.asm_text.focus_set()
         else:
-            if self.asm_focus_mode:
-                self.action_toggle_asm_focus()
             curr_lhs = self.py_text.get("1.0", "end-1c").strip()
             if norm == "c":
                 self.file_kind = "c"
@@ -3138,17 +3471,25 @@ class C64StudioApp:
                     self.action_transpile_code(silent=True)
                 else:
                     self._highlight_py_editor()
+            self.switch_tab("tab-asm")
             self.py_text.focus_set()
 
         self._update_mode_badge()
         self.notify(f"C64 STUDIO LANGUAGE MODE: {norm.upper()}")
 
     def _on_left_build_clicked(self) -> None:
-        """Compile C/C++ (Oscar64/CC65) when in 'c' mode, or transpile Python -> 6502 in 'py' mode."""
+        """Convert Python/C to 6502 ASM and toggle the ASM inspector view ON."""
         if self.file_mode == "c":
             self.action_build()
-        else:
-            self.action_transpile_code()
+            if self.asm_text.get("1.0", "end-1c").strip():
+                self.asm_focus_mode = True
+                self.switch_tab("tab-asm")
+                self._update_mode_badge()
+        elif self.file_mode == "py":
+            if self.action_transpile_code():
+                self.asm_focus_mode = True
+                self.switch_tab("tab-asm")
+                self._update_mode_badge()
 
     def _update_language_button_styles(self) -> None:
         t = THEMES[self.current_theme]
@@ -3162,27 +3503,36 @@ class C64StudioApp:
             )
 
     def action_toggle_asm_focus(self) -> None:
-        """Toggle between Split View (Python + ASM) and Full 6502 ASM IDE Focus Mode."""
+        """Toggle between the primary coding editor (Python/C/Def) and the 6502 ASM view."""
         self.asm_focus_mode = not self.asm_focus_mode
-        if self.asm_focus_mode:
-            self.py_editor_container.pack_forget()
-            self.left_hdr_bar.pack_forget()
-            self.label_nav_frame.pack_configure(fill=tk.BOTH, expand=True, pady=0)
-            self.label_listbox.configure(height=24)
-            self.workspace_frame.columnconfigure(0, weight=2)
-            self.workspace_frame.columnconfigure(1, weight=9)
+        if self.file_mode == "asm":
             self.switch_tab("tab-asm")
-            self.notify("6502 ASM IDE FOCUS ENABLED (CTRL+E TO SPLIT)")
+            self._update_mode_badge()
+            self.asm_text.focus_set()
+            self.notify("6502 ASM EDITOR ACTIVE (SELECT PYTHON OR C/OSCAR TO SWITCH LANGUAGE)")
+            return
+
+        if self.asm_focus_mode:
+            if self.file_mode == "py" and self.py_text.get("1.0", "end-1c").strip():
+                self.action_transpile_code(silent=True)
+            elif (
+                self.file_mode == "c"
+                and not self.asm_text.get("1.0", "end-1c").strip()
+                and self.py_text.get("1.0", "end-1c").strip()
+            ):
+                self._set_asm_text(
+                    "// Press F7 (BUILD) or click '⚡ C → ASM (F7)' to compile with Oscar64/CC65\n"
+                    "// and inspect the disassembled 6502 machine instructions here.\n"
+                )
+            self.switch_tab("tab-asm")
+            self._update_mode_badge()
+            self.asm_text.focus_set()
+            self.notify("SHOWING 6502 ASM VIEW (CLICK 'HIDE ASM' OR CTRL+E TO RETURN)")
         else:
-            self.label_nav_frame.pack_forget()
-            self.left_hdr_bar.pack(fill=tk.X, pady=(0, 4))
-            self.py_editor_container.pack(fill=tk.BOTH, expand=True)
-            self.label_nav_frame.pack(fill=tk.X, pady=(6, 0))
-            self.label_listbox.configure(height=5)
-            self.workspace_frame.columnconfigure(0, weight=5)
-            self.workspace_frame.columnconfigure(1, weight=7)
-            self.notify("SPLIT VIEW (PYTHON + 6502 ASM) ENABLED")
-        self.apply_theme(self.current_theme)
+            self.switch_tab("tab-asm")
+            self._update_mode_badge()
+            self.py_text.focus_set()
+            self.notify(f"RETURNED TO {self.file_mode.upper()} EDITOR")
 
     def action_toggle_fullscreen(self) -> None:
         """Toggle F11 borderless fullscreen C64 monitor mode."""
@@ -3196,11 +3546,12 @@ class C64StudioApp:
 
     def action_focus_find(self) -> None:
         self.switch_tab("tab-asm")
-        self.find_entry.focus_set()
-        self.find_entry.selection_range(0, tk.END)
+        entry = self.find_entry if self._is_asm_view_active() else self.py_find_entry
+        entry.focus_set()
+        entry.selection_range(0, tk.END)
 
     def _update_mode_badge(self) -> None:
-        """Show the file and how far along LOAD > BUILD > RUN it has got."""
+        """Show the active file, language header, ASM toggle state, and LOAD > BUILD > RUN stage."""
         if self.loaded_file:
             fname = self.loaded_file.name
         elif self._has_source():
@@ -3215,17 +3566,38 @@ class C64StudioApp:
         steps = ("LOAD [F3]", "BUILD [F7]", "RUN [F5]")
         marks = " > ".join(f"*{step}*" if i < self.stage else step for i, step in enumerate(steps))
         self.mode_badge_lbl.configure(text=f"[{fname.upper()} // {marks}]")
-        default_kind = "c" if self.file_mode == "c" else "python"
-        title = KIND_LABELS.get(self.file_kind, KIND_LABELS[default_kind])
-        self.left_title_lbl.configure(text=f"{title} // {fname.upper()}" if self.file_mode == "def" else title)
-        self.btn_py_to_asm.configure(
-            text="COMPILE C (F7)" if self.file_mode == "c" else "PY → ASM (F6)",
-            state=tk.DISABLED if self.file_mode == "def" else tk.NORMAL,
-        )
-        if hasattr(self, "agy_lang_var") and self.file_mode in ("asm", "c", "py"):
+
+        if self.file_mode == "asm":
+            hdr_txt = f"6502 ASSEMBLY (KICKASSEMBLER V5.X) // {fname.upper()}"
+        elif self.asm_focus_mode:
+            src_name = "C / OSCAR64" if self.file_mode == "c" else "PYTHON"
+            hdr_txt = f"GENERATED 6502 ASSEMBLY (FROM {src_name}) // {fname.upper()}"
+        elif self.file_mode == "def":
+            title = KIND_LABELS.get(self.file_kind, KIND_LABELS["python"])
+            hdr_txt = f"{title} // {fname.upper()}"
+        else:
+            default_kind = "c" if self.file_mode == "c" else "python"
+            title = KIND_LABELS.get(self.file_kind, KIND_LABELS[default_kind])
+            hdr_txt = f"{title} // {fname.upper()}" if self.loaded_file else title
+        self.left_title_lbl.configure(text=hdr_txt)
+
+        if self.file_mode == "c":
+            conv_lbl = "⚡ C → ASM (F7)"
+            conv_state = tk.NORMAL
+        elif self.file_mode == "py":
+            conv_lbl = "⚡ PY → ASM (F6)"
+            conv_state = tk.NORMAL
+        else:
+            conv_lbl = "⚡ PY → ASM (F6)"
+            conv_state = tk.DISABLED
+        self.btn_py_to_asm.configure(text=conv_lbl, state=conv_state)
+
+        if hasattr(self, "agy_lang_var") and self.file_mode in ("asm", "c", "py", "def"):
             self.agy_lang_var.set(self.file_mode)
         if hasattr(self, "lang_buttons"):
             self._update_language_button_styles()
+        if hasattr(self, "btn_show_asm"):
+            self._sync_editor_display()
 
     def _set_stage(self, stage: int) -> None:
         self.stage = stage
@@ -3337,7 +3709,7 @@ class C64StudioApp:
         self._draw_bottom_deck()
 
         def _stop_busy():
-            if not self.root.winfo_exists():
+            if not self.root.winfo_exists() or self._agy_busy:
                 return
             self._border_busy = False
             self._busy_phase = "READY // DMA LINK IDLE"
@@ -3357,12 +3729,25 @@ class C64StudioApp:
             if self._border_busy:
                 self._draw_border_and_divider()
         else:
+            if self._agy_busy:
+                elapsed_s = max(0, int(time.monotonic() - getattr(self, "_agy_started_at", time.monotonic())))
+                base_phase = getattr(self, "_agy_status_base", "ANTIGRAVITY CLI GENERATING")
+                self._busy_phase = f"{base_phase} [{elapsed_s}S]"[:46]
+                if self._anim_tick % 6 == 0:
+                    short_btn = base_phase.replace("AGY ", "")[:16]
+                    self.btn_agy_send.configure(text=f"⏳ {short_btn} ({elapsed_s}s)")
+                    self._set_agy_live_banner(
+                        True,
+                        f"⚡ {base_phase} [{elapsed_s}s] — Live-editing active editor buffer",
+                    )
             if self._border_busy:
                 self._draw_border_and_divider()
                 self._draw_bottom_deck()
             cursor_char = "█" if (self._anim_tick // 5) % 2 == 0 else " "
             base_text = getattr(self, "_last_status_message", str(t["ready_prompt"]))
             self.prompt_lbl.configure(text=f"{base_text} {cursor_char}")
+            if getattr(self, "_in_mainloop", False) and (self._anim_tick % 10 == 0):
+                self._poll_external_cli_activity()
 
         self.root.after(80, self._tick_animation)
 
@@ -3392,6 +3777,7 @@ class C64StudioApp:
         self.py_text.delete("1.0", tk.END)
         self.py_text.insert("1.0", code)
         self._highlight_py_editor()
+        self._on_py_cursor_move()
 
     def _set_asm_text(self, asm_code: str) -> None:
         self.asm_text.delete("1.0", tk.END)
@@ -3649,6 +4035,29 @@ class C64StudioApp:
         """A loaded .prg whose disassembly has not been edited runs as it is."""
         return bool(self.binary_source and self.binary_source.is_file() and self._asm_unchanged())
 
+    def _mark_editor_synced(self) -> None:
+        """Snapshot the active editor text so external CLI file sync can detect unsaved manual edits."""
+        self._last_synced_editor_text = self._editor_text()
+
+    def _is_editor_dirty(self) -> bool:
+        """Return True only when the user has unsaved manual edits beyond a blank/starter buffer."""
+        cur = self._editor_text()
+        if not cur.strip():
+            return False
+        if cur in (NEW_ASM_TEMPLATE, NEW_C_TEMPLATE, NEW_PY_TEMPLATE):
+            return False
+        return cur != self._last_synced_editor_text
+
+    def _record_self_saved_file(self, path: Path) -> None:
+        """Record mtime of a file written by C64 Studio itself so the watcher ignores self-writes."""
+        try:
+            resolved = path.resolve()
+            st = resolved.stat()
+            self._self_written_mtimes[resolved] = st.st_mtime_ns
+            self._workspace_watch_mtimes[resolved] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            pass
+
     def _save_loaded_file(self) -> None:
         """Building uses what is on screen, so it goes to disk first."""
         if not self.loaded_file:
@@ -3656,6 +4065,8 @@ class C64StudioApp:
         text = self._editor_text()
         if not self.loaded_file.is_file() or self.loaded_file.read_text(encoding="utf-8") != text:
             self.loaded_file.write_text(text, encoding="utf-8")
+            self._record_self_saved_file(self.loaded_file)
+            self._mark_editor_synced()
             self._write_log(f"✓ Saved {self.loaded_file}")
 
     def _project_manifest(self) -> Optional[Path]:
@@ -3859,38 +4270,50 @@ class C64StudioApp:
         if kind in ("build", *DEFINITION_KINDS):
             self._begin_load(kind, path)
             self.file_mode = "def"
-            if self.asm_focus_mode:
-                self.action_toggle_asm_focus()
+            self.asm_focus_mode = False
+            self.agy_lang_var.set("def")
             self._set_python_text(path.read_text(encoding="utf-8"))
             self._set_asm_text("")
             self.last_asm = ""
-            self.switch_tab("tab-log")
+            self._mark_editor_synced()
+            self.switch_tab("tab-asm")
             self._write_log(f"✓ Loaded {KIND_LABELS[kind]}: {path.name}. F7 builds it.")
             self.notify(f'LOADED "{path.name.upper()}"')
 
         elif kind == "c":
             self._begin_load(kind, path)
             self.file_mode = "c"
-            if self.asm_focus_mode:
-                self.action_toggle_asm_focus()
+            self.asm_focus_mode = False
+            self.agy_lang_var.set("c")
             self._set_python_text(path.read_text(encoding="utf-8"))
+            self._set_asm_text("")
+            self.last_asm = ""
+            self._mark_editor_synced()
+            self.switch_tab("tab-asm")
             self._write_log(f"✓ Loaded C/C++ source (Oscar64/CC65): {path.name} ({path.stat().st_size} bytes)")
             self.notify(f'LOADED "{path.name.upper()}" (C/OSCAR64 MODE)')
 
         elif kind == "python":
             self._begin_load(kind, path)
             self.file_mode = "py"
+            self.asm_focus_mode = False
+            self.agy_lang_var.set("py")
             self._set_python_text(path.read_text(encoding="utf-8"))
+            self._mark_editor_synced()
+            self.action_transpile_code(silent=True)
+            self.switch_tab("tab-asm")
             self._write_log(f"✓ Loaded Python source: {path.name} ({path.stat().st_size} bytes)")
             self.notify(f'LOADED "{path.name.upper()}"')
-            self.action_transpile_code(silent=True)
 
         elif kind == "asm":
             self._begin_load(kind, path)
             self.file_mode = "asm"
+            self.asm_focus_mode = False
+            self.agy_lang_var.set("asm")
             asm_content = path.read_text(encoding="utf-8")
             self.last_asm = asm_content
             self._set_asm_text(asm_content)
+            self._mark_editor_synced()
             self.switch_tab("tab-asm")
             self._write_log(
                 f"✓ Loaded 6502 Assembly: {path.name} ({path.stat().st_size} bytes, {len(asm_content.splitlines())} lines)"
@@ -3901,15 +4324,18 @@ class C64StudioApp:
             has_sidecar = sidecar.is_file() and classify_file(sidecar) == "python"
             self._set_python_text(sidecar.read_text(encoding="utf-8") if has_sidecar else "")
             if has_sidecar:
-                self._write_log(f"ℹ Its Python source {sidecar.name} is in the left pane")
+                self._write_log(f"ℹ Matching Python source {sidecar.name} is ready (click PYTHON to edit)")
 
         elif kind == "sid":
             self._begin_load(kind, None)     # the source gets its own file: never save over the .sid
+            self.agy_lang_var.set("asm")
             self._load_sid_file(path)
+            self._mark_editor_synced()
 
         elif kind in ("d64", "tap", "prg", "bin"):
             def _shown() -> None:
                 self._begin_load(kind, None)     # likewise for the image
+                self.agy_lang_var.set("asm")
                 if kind in ("prg", "bin"):
                     self.binary_source = path
                     self.last_prg_path = path
@@ -4365,6 +4791,8 @@ class C64StudioApp:
                 return
             self.loaded_file = Path(chosen)
         self.loaded_file.write_text(self._editor_text(), encoding="utf-8")
+        self._record_self_saved_file(self.loaded_file)
+        self._mark_editor_synced()
         if self.file_mode == "asm":
             self.last_asm = self._editor_text()
         self._write_log(f"✓ Saved {self.loaded_file}")
@@ -4385,6 +4813,8 @@ class C64StudioApp:
             )
             out_c.write_text(c_text, encoding="utf-8")
             self.loaded_file = out_c
+            self._record_self_saved_file(out_c)
+            self._mark_editor_synced()
             self._write_log(f"✓ Saved C/C++ source to {out_c}")
             self.notify(f'SAVED "{out_c.name.upper()}"')
             self._update_mode_badge()
@@ -4396,7 +4826,9 @@ class C64StudioApp:
             return
         out_file = self.loaded_file if (self.file_mode == "asm" and self.loaded_file) else Path("./output.asm").resolve()
         out_file.write_text(current_text, encoding="utf-8")
+        self._record_self_saved_file(out_file)
         self.last_asm = current_text
+        self._mark_editor_synced()
         self._write_log(f"✓ Saved 6502 assembly to {out_file}")
         self.notify(f'SAVED "{out_file.name.upper()}"')
 
@@ -4604,9 +5036,11 @@ class C64StudioApp:
                 code = PRESETS[keys[idx]].get("code", "")
                 self._begin_load("python", None)
                 self.file_mode = "py"
+                self.asm_focus_mode = False
                 self._set_python_text(str(code))
-                self._update_mode_badge()
                 self.action_transpile_code()
+                self.switch_tab("tab-asm")
+                self._update_mode_badge()
                 self.notify(f"LOADED PRESET: {keys[idx].upper()}")
             if dlg.winfo_exists():
                 dlg.destroy()
@@ -4693,14 +5127,16 @@ class C64StudioApp:
 
         guide_content = (
             f"{FONT_CREDITS_TEXT}\n\n"
-            "6502 ASSEMBLY (.ASM) EDITOR POWER TOOLS\n"
+            "SINGLE-SCREEN EDITOR & 6502 ASM TOGGLE TOOLS\n"
             "============================================================\n"
-            "• Ctrl+E        : Toggle Full 6502 ASM IDE Focus vs Split View (Python + ASM)\n"
+            "• ASM / C / PY  : Pick your active coding language in one focused full-screen editor\n"
+            "• SHOW ASM (^E) : Toggle between your Python/C editor and its generated 6502 Assembly\n"
+            "• F6 / C→ASM    : Convert Python or C to 6502 Assembly and inspect the ASM output\n"
             "• Ctrl+N        : Create New 6502 KickAssembler (.asm) Starter Template\n"
             "• Ctrl+S / ⇧F1  : Save the Loaded File\n"
-            "• Ctrl+/        : Comment / Uncomment Selected 6502 Assembly Lines\n"
+            "• Ctrl+/        : Comment / Uncomment Selected Lines (# in Python, // in C & ASM)\n"
             "• Ctrl+F        : Find Text, Label, or Jump to Line Number\n"
-            "• Label Outline : Click any label/subroutine in the left outline to jump instantly\n\n"
+            "• Label Outline : Click any label/subroutine in the ASM outline rail to jump instantly\n\n"
             "THE SEQUENCE\n"
             "============================================================\n"
             "1. LOAD (F3)  : Any file goes on screen. Nothing runs yet.\n"
@@ -4854,11 +5290,23 @@ class C64StudioApp:
         self._last_agy_modal = modal
         modal.show_tk(self, callback=lambda updated: self._refresh_agy_badge(updated))
 
+    def action_launch_agy_terminal(self) -> None:
+        """Open an interactive `agy` terminal window rooted in the workspace with live C64 Studio sync."""
+        ok, msg = self.agy.launch_interactive_terminal()
+        self._write_log(f"{'✓' if ok else 'ℹ'} {msg}")
+        self._write_agy_chat(
+            f"\n[🖥 CLI TERMINAL] {msg}\n"
+            "  • Any .asm / .c / .py / .sid files generated or MCP builds run in that CLI terminal "
+            "automatically appear live in C64 Studio while 'CLI SYNC' is checked."
+        )
+        self.notify("LAUNCHED INTERACTIVE AGY CLI TERMINAL" if ok else msg[:48].upper())
+
     def action_focus_agy_prompt(self) -> None:
-        """Switch to the Antigravity AI Console tab and focus the prompt entry box (`Shift+F12`)."""
-        if self.file_mode in ("asm", "c", "py"):
+        """Keep the main editor visible and focus the bottom Antigravity CLI prompt bar (`Shift+F12`)."""
+        if self.file_mode in ("asm", "c", "py", "def"):
             self.agy_lang_var.set(self.file_mode)
-        self.switch_tab("tab-agy")
+        if self._active_tab not in ("tab-asm", "tab-agy"):
+            self.switch_tab("tab-asm")
         try:
             self.agy_prompt_entry.focus_set()
             self.agy_prompt_entry.selection_range(0, tk.END)
@@ -4871,11 +5319,37 @@ class C64StudioApp:
         self.agy_chat_text.insert(tk.END, f"{text}\n")
         self.agy_chat_text.see(tk.END)
 
+    def _append_agy_delta(self, chunk: str) -> None:
+        """Append a live streaming text delta to the Antigravity CRT console without artificial newlines."""
+        if not chunk or not self.root.winfo_exists():
+            return
+        self.agy_chat_text.insert(tk.END, chunk)
+        self.agy_chat_text.see(tk.END)
+
     def _clear_agy_chat(self) -> None:
         self.agy_chat_text.delete("1.0", tk.END)
 
+    def _preview_streaming_code_block(self, block: ExtractedCodeBlock) -> None:
+        """Live-render an in-progress streamed code block directly into the focused single-screen editor."""
+        if not self.root.winfo_exists() or not self.agy_auto_apply_var.get():
+            return
+        mode = block.studio_mode if block.studio_mode in ("asm", "c", "py", "def") else "asm"
+        if mode == "asm":
+            self.file_mode = "asm"
+            self.asm_focus_mode = False
+            self._sync_editor_display()
+            self._set_asm_text(block.code)
+            self.asm_text.see(tk.END)
+        else:
+            if self.file_mode != mode:
+                self.file_mode = mode
+            self.asm_focus_mode = False
+            self._sync_editor_display()
+            self._set_python_text(block.code)
+            self.py_text.see(tk.END)
+
     def action_send_agy_prompt(self, prompt_override: Optional[str] = None) -> None:
-        """Send a prompt from C64 Studio to the Antigravity CLI (`agy`) and stream/apply code."""
+        """Send a prompt from C64 Studio to the Antigravity CLI (`agy`) with live single-editor streaming."""
         if self._agy_busy:
             self.notify("ANTIGRAVITY CLI IS CURRENTLY GENERATING...", severity="warning")
             return
@@ -4904,32 +5378,118 @@ class C64StudioApp:
         if prompt_override is None:
             self.agy_prompt_var.set("")
 
-        self.switch_tab("tab-agy")
-        target_lang = (self.agy_lang_var.get() or self.file_mode or "asm").strip().lower()
-        if target_lang not in ("asm", "c", "py"):
-            target_lang = "asm"
+        base_lang = (self.agy_lang_var.get() or self.file_mode or "asm").strip().lower()
+        if base_lang not in ("asm", "c", "py", "def"):
+            base_lang = "asm"
+        target_lang = infer_prompt_language(user_prompt, fallback_mode=base_lang)
+        self.agy_lang_var.set(target_lang)
 
         current_code = (
             self.asm_text.get("1.0", "end-1c")
-            if target_lang == "asm"
+            if self.file_mode == "asm"
             else self.py_text.get("1.0", "end-1c")
         )
         include_ctx = bool(self.agy_include_ctx_var.get())
         continue_conv = bool(self.agy_continue_var.get())
         exec_mode = self.agy_mode_var.get().strip() or "accept-edits"
+        effort_level = self.agy_effort_var.get().strip()
+
+        # Keep the single main editor focused so the user watches `agy` generate/edit right in place
+        if self.agy_auto_apply_var.get():
+            if target_lang == "asm":
+                self.file_mode = "asm"
+                self.asm_focus_mode = False
+            else:
+                if self.file_mode != target_lang:
+                    self.file_mode = target_lang
+                self.asm_focus_mode = False
+            self.switch_tab("tab-asm")
+            self._update_mode_badge()
+        else:
+            self.switch_tab("tab-agy")
 
         self._agy_busy = True
-        self.btn_agy_send.configure(state=tk.DISABLED, text="⏳ AGY THINKING...")
-        self._pulse_raster_border(f"ANTIGRAVITY CLI ({target_lang.upper()})", 900)
+        self._agy_started_at = time.monotonic()
+        self._agy_status_base = f"AGY CONNECTING ({target_lang.upper()})"
+        self._border_busy = True
+        self._busy_phase = f"{self._agy_status_base} [0S]"
+        self.btn_agy_send.configure(state=tk.DISABLED, text="⏳ CONNECTING (0s)")
+        self._set_agy_live_banner(
+            True,
+            f"⚡ {self._agy_status_base} [0s] — Generating directly into {target_lang.upper()} editor...",
+        )
+        self._draw_border_and_divider()
+        self._draw_bottom_deck()
+
         self._write_agy_chat(f"\n>>> YOU [{target_lang.upper()}]: {user_prompt}")
-        self._write_agy_chat("─── ANTIGRAVITY CLI RESPONSE ───────────────────────────────────────────")
+        self._write_agy_chat("─── ANTIGRAVITY CLI LIVE STREAM ────────────────────────────────────────")
+
+        stream_accum: list[str] = []
+        saw_delta = False
+        last_preview_ts = 0.0
+        last_logged_status = ""
+
+        def _handle_status(status_msg: str) -> None:
+            nonlocal last_logged_status
+            if not self.root.winfo_exists():
+                return
+            self._agy_status_base = status_msg[:36]
+            elapsed_s = max(0, int(time.monotonic() - self._agy_started_at))
+            self._busy_phase = f"{self._agy_status_base} [{elapsed_s}S]"[:46]
+            short_btn = status_msg.replace("AGY ", "")[:16]
+            self.btn_agy_send.configure(text=f"⏳ {short_btn} ({elapsed_s}s)")
+            self._set_agy_live_banner(
+                True,
+                f"⚡ {self._agy_status_base} [{elapsed_s}s] — Live-editing {target_lang.upper()} editor",
+            )
+            self._draw_bottom_deck()
+            if (
+                status_msg != last_logged_status
+                and status_msg.startswith(("AGY CONNECTED", "AGY THINKING", "AGY TOOL:", "AGY TOOL BLOCKED:"))
+            ):
+                last_logged_status = status_msg
+                tail_char = self.agy_chat_text.get("end-2c", "end-1c")
+                prefix = "\n" if tail_char and tail_char != "\n" else ""
+                self._append_agy_delta(f"{prefix}  • {status_msg}\n")
+
+        def _handle_delta(chunk: str) -> None:
+            nonlocal saw_delta, last_preview_ts
+            saw_delta = True
+            stream_accum.append(chunk)
+            self._append_agy_delta(chunk)
+            now = time.monotonic()
+            if self.agy_auto_apply_var.get() and (now - last_preview_ts >= 0.12 or "\n" in chunk):
+                last_preview_ts = now
+                preview = extract_streaming_code_preview("".join(stream_accum), preferred_mode=target_lang)
+                if preview is not None:
+                    self._preview_streaming_code_block(preview)
+
+        def _handle_file_write(fpath: Path, _content: Optional[str]) -> None:
+            self._record_self_saved_file(fpath)
+            self._write_log(f"✓ Antigravity CLI updated file on disk: {fpath}")
+            if self.agy_auto_apply_var.get() and fpath.is_file():
+                self._sync_external_file(fpath, source_tag="AGY WRITE")
 
         def _finish(res: AgyPromptResult) -> None:
             self._agy_busy = False
+            self._border_busy = False
+            self._busy_phase = "READY // DMA LINK IDLE"
             self.last_agy_result = res
             if self.root.winfo_exists():
+                self._set_agy_live_banner(False)
                 self.btn_agy_send.configure(state=tk.NORMAL, text="▶ ASK ANTIGRAVITY")
+                self._draw_border_and_divider()
+                self._draw_bottom_deck()
+
+            if not saw_delta and res.response_text.strip():
+                self._write_agy_chat(res.response_text)
+            elif saw_delta:
+                tail_char = self.agy_chat_text.get("end-2c", "end-1c")
+                if tail_char and tail_char != "\n":
+                    self._append_agy_delta("\n")
+
             if not res.success and res.error_message:
+                self.switch_tab("tab-agy")
                 self._write_agy_chat(f"✗ Error: {res.error_message}")
                 self._write_log(f"✗ Antigravity CLI Error: {res.error_message}")
                 self.notify("ANTIGRAVITY CLI ERROR (SEE AI CONSOLE)", severity="error")
@@ -4948,8 +5508,16 @@ class C64StudioApp:
                 if self.agy_auto_apply_var.get():
                     self._apply_extracted_code_block(block)
                 else:
+                    self.switch_tab("tab-agy")
                     self.notify(f"AGY {block.studio_mode.upper()} CODE READY — CLICK APPLY")
+            elif res.touched_files:
+                latest_file = res.touched_files[-1]
+                if self.agy_auto_apply_var.get() and latest_file.is_file():
+                    self._sync_external_file(latest_file, source_tag="AGY CLI")
+                else:
+                    self.notify(f"AGY UPDATED {latest_file.name.upper()}")
             else:
+                self.switch_tab("tab-agy")
                 self.notify("ANTIGRAVITY RESPONSE RECEIVED")
 
         if getattr(self, "_in_mainloop", False):
@@ -4962,12 +5530,18 @@ class C64StudioApp:
                     include_code_context=include_ctx,
                     continue_conversation=continue_conv,
                     exec_mode=exec_mode,
-                    on_line=lambda ln: self.root.after(0, lambda line=ln: self._write_agy_chat(line)),
+                    effort=effort_level,
+                    on_delta=lambda d: self.root.after(0, lambda chunk=d: _handle_delta(chunk)),
+                    on_status=lambda s: self.root.after(0, lambda st_msg=s: _handle_status(st_msg)),
+                    on_file_write=lambda p, c: self.root.after(
+                        0, lambda fp=p, txt=c: _handle_file_write(fp, txt)
+                    ),
                 )
                 try:
                     self.root.after(0, lambda: _finish(res))
                 except (tk.TclError, RuntimeError):
                     self._agy_busy = False
+                    self._border_busy = False
 
             threading.Thread(target=_worker, daemon=True).start()
         else:
@@ -4979,30 +5553,59 @@ class C64StudioApp:
                 include_code_context=include_ctx,
                 continue_conversation=continue_conv,
                 exec_mode=exec_mode,
-                on_line=self._write_agy_chat,
+                effort=effort_level,
+                on_delta=_handle_delta,
+                on_status=_handle_status,
+                on_file_write=_handle_file_write,
             )
             _finish(res)
 
     def _apply_extracted_code_block(self, block: ExtractedCodeBlock) -> None:
-        """Load an extracted Antigravity code block (`asm`, `c`, or `py`) into C64 Studio."""
-        mode = block.studio_mode if block.studio_mode in ("asm", "c", "py") else "asm"
+        """Load an extracted Antigravity code block (`asm`, `c`, `py`, or `def`) into the single-screen editor."""
+        mode = block.studio_mode if block.studio_mode in ("asm", "c", "py", "def") else "asm"
+        if mode == "def":
+            preserved_kind = self.file_kind if self.file_kind in ("build", *DEFINITION_KINDS) else "build"
+            self._begin_load(preserved_kind, self.loaded_file)
+            self.file_mode = "def"
+            self.asm_focus_mode = False
+            self.agy_lang_var.set("def")
+            self._set_python_text(block.code)
+            self._mark_editor_synced()
+            self.switch_tab("tab-asm")
+            self._update_mode_badge()
+            self._write_log(
+                f"✓ Applied Antigravity Game Dev definition into editor ({len(block.code.splitlines())} lines)"
+            )
+            self.notify("APPLIED AGY GAME DEFINITION (F7 TO BUILD)")
+            return
+
         kind = "python" if mode == "py" else mode
-        self._begin_load(kind, self.loaded_file)
+        target_loaded = self.loaded_file
+        if target_loaded is not None:
+            suf = target_loaded.suffix.lower()
+            if (mode == "asm" and suf not in (".asm", ".s")) or (
+                mode == "c" and suf not in (".c", ".cpp", ".cc", ".cxx", ".h")
+            ) or (mode == "py" and suf != ".py"):
+                target_loaded = None
+        self._begin_load(kind, target_loaded)
         self.file_mode = mode
+        self.asm_focus_mode = False
         self.agy_lang_var.set(mode)
 
         if mode == "asm":
             self.last_asm = block.code
             self._set_asm_text(block.code)
+            self._mark_editor_synced()
+            self.switch_tab("tab-asm")
             self._update_mode_badge()
             self._write_log(
-                f"✓ Applied Antigravity 6502 Assembly into ASM IDE ({len(block.code.splitlines())} lines)"
+                f"✓ Applied Antigravity 6502 Assembly into editor ({len(block.code.splitlines())} lines)"
             )
             self.notify("APPLIED AGY 6502 ASM TO EDITOR (F5 TO RUN)")
         else:
-            if self.asm_focus_mode:
-                self.action_toggle_asm_focus()
             self._set_python_text(block.code)
+            self._mark_editor_synced()
+            self.switch_tab("tab-asm")
             self._update_mode_badge()
             if mode == "py":
                 self.action_transpile_code(silent=True)
@@ -5015,6 +5618,172 @@ class C64StudioApp:
                     f"✓ Applied Antigravity C (Oscar64/CC65) code into editor ({len(block.code.splitlines())} lines)"
                 )
                 self.notify("APPLIED AGY C SOURCE TO EDITOR (F5 TO COMPILE & RUN)")
+
+    # -----------------------------------------------------------------------
+    # External CLI & MCP Live Workspace Sync
+    # -----------------------------------------------------------------------
+
+    def _iter_watched_workspace_files(self) -> list[Path]:
+        """Return candidate source files across the workspace for external CLI live sync."""
+        watched_exts = {".asm", ".s", ".c", ".cpp", ".cc", ".cxx", ".py", ".sid"}
+        ignored_dirs = {
+            ".git",
+            ".venv",
+            ".pytest_cache",
+            "__pycache__",
+            ".agents",
+            "src",
+            "tests",
+            "tools",
+            "curated_core_docs",
+            "screenshots",
+            "build",
+            "dist",
+        }
+        root_dir = self.agy.workspace_dir
+        results: list[Path] = []
+        if self.loaded_file and self.loaded_file.is_file():
+            results.append(self.loaded_file.resolve())
+
+        try:
+            for entry in root_dir.iterdir():
+                if entry.name.startswith(".") or entry.name in ignored_dirs:
+                    continue
+                if entry.is_file() and entry.suffix.lower() in watched_exts:
+                    results.append(entry.resolve())
+                elif entry.is_dir():
+                    for sub in entry.rglob("*"):
+                        if any(part.startswith(".") or part in ignored_dirs for part in sub.parts):
+                            continue
+                        if sub.is_file() and sub.suffix.lower() in watched_exts:
+                            results.append(sub.resolve())
+        except OSError:
+            pass
+        return results
+
+    def _init_external_cli_watch_state(self) -> None:
+        """Snapshot workspace file mtimes and seek to the end of the MCP event journal at startup."""
+        self._workspace_watch_mtimes.clear()
+        for fpath in self._iter_watched_workspace_files():
+            try:
+                st = fpath.stat()
+                self._workspace_watch_mtimes[fpath] = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                pass
+        journal = get_studio_event_journal_path()
+        try:
+            self._studio_journal_offset = journal.stat().st_size if journal.is_file() else 0
+        except OSError:
+            self._studio_journal_offset = 0
+
+    def _sync_external_file(self, path: Path, source_tag: str = "EXTERNAL CLI") -> None:
+        """Load or refresh a source file created/modified by an external CLI into C64 Studio."""
+        if not path.is_file():
+            return
+        resolved = path.resolve()
+        try:
+            st = resolved.stat()
+            self._workspace_watch_mtimes[resolved] = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return
+
+        if self._is_editor_dirty():
+            msg = (
+                f"ℹ [{source_tag}] {resolved.name} changed on disk — "
+                "unsaved editor edits preserved (press F3 to reload)."
+            )
+            self._write_log(msg)
+            self._write_agy_chat(msg)
+            return
+
+        self.load_project_file(resolved)
+        try:
+            rel_disp = str(resolved.relative_to(self.agy.workspace_dir))
+        except ValueError:
+            rel_disp = resolved.name
+        notice = f"📥 [{source_tag}] Live-synced `{rel_disp}` into C64 Studio."
+        self._write_agy_chat(notice)
+        self._write_log(notice)
+        self.notify(f"{source_tag}: SYNCED {resolved.name.upper()}")
+
+    def _poll_external_cli_activity(self) -> None:
+        """Poll MCP bridge events and external CLI workspace file writes (~800ms cadence)."""
+        if not self.agy_watch_cli_var.get():
+            return
+
+        # 1. Tail MCP server event journal (fires when external `agy` runs c64_build_and_run, etc.)
+        journal = get_studio_event_journal_path()
+        if journal.is_file():
+            try:
+                sz = journal.stat().st_size
+                if sz < self._studio_journal_offset:
+                    self._studio_journal_offset = 0
+                if sz > self._studio_journal_offset:
+                    with journal.open("r", encoding="utf-8", errors="replace") as fh:
+                        fh.seek(self._studio_journal_offset)
+                        new_chunk = fh.read()
+                        self._studio_journal_offset = fh.tell()
+                    for raw_ln in new_chunk.splitlines():
+                        raw_ln = raw_ln.strip()
+                        if not raw_ln:
+                            continue
+                        try:
+                            evt = json.loads(raw_ln)
+                        except Exception:
+                            continue
+                        phase = evt.get("phase", "")
+                        tool_name = evt.get("tool", "mcp")
+                        summary = evt.get("summary") or f"{tool_name} ({phase})"
+                        ok = bool(evt.get("ok", True))
+                        src_str = evt.get("source_path")
+                        prg_str = evt.get("prg_path")
+                        sid_str = evt.get("sid_path")
+
+                        if phase == "start":
+                            self._pulse_raster_border(f"CLI MCP: {tool_name.upper()}", 900)
+                            self._write_agy_chat(f"\n⚡ [CLI → MCP] {summary}")
+                            self._write_log(f"⚡ [CLI → MCP] {summary}")
+                            if src_str and Path(src_str).is_file() and not self._agy_busy:
+                                self._sync_external_file(Path(src_str), source_tag="CLI MCP")
+                        elif phase == "done":
+                            icon = "✓" if ok else "✗"
+                            self._write_agy_chat(f"{icon} [CLI → MCP] {summary}")
+                            self._write_log(f"{icon} [CLI → MCP] {summary}")
+                            if prg_str and Path(prg_str).is_file():
+                                self.last_prg_path = Path(prg_str)
+                            if sid_str and Path(sid_str).is_file():
+                                self.last_sid_path = Path(sid_str)
+                            self.notify(
+                                summary[:46].upper(),
+                                severity="information" if ok else "error",
+                            )
+            except OSError:
+                pass
+
+        # 2. Check watched workspace files for external CLI creations/modifications
+        if self._agy_busy:
+            return
+
+        changed_files: list[tuple[int, Path]] = []
+        for fpath in self._iter_watched_workspace_files():
+            try:
+                st = fpath.stat()
+            except OSError:
+                continue
+            sig = (st.st_mtime_ns, st.st_size)
+            prev_sig = self._workspace_watch_mtimes.get(fpath)
+            if prev_sig == sig:
+                continue
+            self._workspace_watch_mtimes[fpath] = sig
+            if self._self_written_mtimes.get(fpath) == st.st_mtime_ns:
+                continue
+            if st.st_size > 0:
+                changed_files.append((st.st_mtime_ns, fpath))
+
+        if changed_files:
+            changed_files.sort(key=lambda item: item[0])
+            newest_path = changed_files[-1][1]
+            self._sync_external_file(newest_path, source_tag="EXTERNAL CLI")
 
     def action_apply_last_agy_code(self) -> None:
         """Apply the most recent code block generated by Antigravity CLI into the editor."""

@@ -891,3 +891,369 @@ def test_c64_studio_agy_setup_modal_and_prompt_workflow(tk_app):
     assert "UPDATE AGY CLI" in modal_ok.install_btn.cget("text")
     modal_ok.close_btn.invoke()
     app.root.update_idletasks()
+
+
+def test_agy_cli_stream_json_and_headless_permission_detection(tmp_path):
+    """Verify NDJSON stream-json token/tool callbacks, file-write fallback, and silent headless error detection."""
+    import io
+    import json
+    from unittest.mock import MagicMock, patch
+    from c64u_bridge.agy_cli import (
+        AgyCliConnector,
+        build_c64_prompt,
+        extract_streaming_code_preview,
+        infer_prompt_language,
+    )
+
+    # 1. Partial streaming code preview & language inference
+    partial_md = "Sure! Streaming your raster routine:\n```asm\nBasicUpstart2(start)\n* = $0810\nstart:\n    inc $d020"
+    preview = extract_streaming_code_preview(partial_md, preferred_mode="py")
+    assert preview is not None
+    assert preview.studio_mode == "asm"
+    assert "inc $d020" in preview.code
+    assert extract_streaming_code_preview("```bash\necho hi", preferred_mode="asm") is None
+
+    assert infer_prompt_language("Write a raster split in KickAssembler", fallback_mode="py") == "asm"
+    assert infer_prompt_language("Build a SID player in Oscar64", fallback_mode="asm") == "c"
+    assert infer_prompt_language("Add a bassline", fallback_mode="def") == "def"
+
+    def_prompt = build_c64_prompt("Add an arpeggio pattern", language_mode="def")
+    assert "PATTERNS" in def_prompt
+    assert "Do NOT invoke `run_command`" in def_prompt
+
+    # 2. Stream-JSON NDJSON parsing + callbacks
+    fake_agy = tmp_path / "agy.exe"
+    fake_agy.write_text("fake", encoding="utf-8")
+    conn = AgyCliConnector(agy_bin=str(fake_agy), workspace_dir=tmp_path)
+
+    written_asm = tmp_path / "generated_demo.asm"
+    written_asm.write_text("BasicUpstart2(start)\n* = $0810\nstart:\n    dec $d020\n    jmp start\n", encoding="utf-8")
+
+    ndjson_events = [
+        {"event": "init", "conversation_id": "conv-12345678-abcd"},
+        {"event": "step_update", "step_update": {"step_type": "user_input", "state": "DONE"}},
+        {
+            "event": "step_update",
+            "step_update": {
+                "step_type": "tool",
+                "state": "ACTIVE",
+                "tool_name": "write_file",
+                "tool_info": {"name": "write_file", "parameters": {"Path": str(written_asm)}},
+            },
+        },
+        {
+            "event": "step_update",
+            "step_update": {
+                "step_type": "tool",
+                "state": "DONE",
+                "tool_name": "write_file",
+                "tool_info": {"name": "write_file", "parameters": {"Path": str(written_asm)}},
+            },
+        },
+        {
+            "event": "step_update",
+            "step_update": {
+                "step_type": "agent_response",
+                "state": "ACTIVE",
+                "text_delta": "Wrote `generated_demo.asm` for you!",
+            },
+        },
+        {
+            "event": "result",
+            "result": {
+                "status": "SUCCESS",
+                "conversation_id": "conv-12345678-abcd",
+                "response": "Wrote `generated_demo.asm` for you!",
+            },
+        },
+    ]
+    fake_proc = MagicMock()
+    fake_proc.stdout = io.StringIO("\n".join(json.dumps(e) for e in ndjson_events) + "\n")
+    fake_proc.stderr = io.StringIO("")
+    fake_proc.wait.return_value = 0
+
+    deltas: list[str] = []
+    statuses: list[str] = []
+    file_writes: list[Path] = []
+    with patch("subprocess.Popen", return_value=fake_proc) as mock_popen:
+        res = conn.run_prompt(
+            "create generated_demo.asm",
+            language_mode="asm",
+            effort="low",
+            on_delta=deltas.append,
+            on_status=statuses.append,
+            on_file_write=lambda p, _txt: file_writes.append(p),
+        )
+        called_cmd = mock_popen.call_args[0][0]
+        assert "--output-format" in called_cmd
+        assert "stream-json" in called_cmd
+        assert "--effort" in called_cmd
+        assert "low" in called_cmd
+
+    assert res.success is True
+    assert res.conversation_id == "conv-12345678-abcd"
+    assert written_asm.resolve() in res.touched_files
+    assert file_writes == [written_asm.resolve()]
+    assert any("AGY CONNECTED" in s for s in statuses)
+    assert any("write_file" in s for s in statuses)
+    assert "generated_demo.asm" in "".join(deltas)
+    # Fallback extracted the written .asm file even though response_text had no fenced block
+    assert res.primary_code_block is not None
+    assert res.primary_code_block.studio_mode == "asm"
+    assert "dec $d020" in res.primary_code_block.code
+
+    # 3. Silent headless permission failure (rc == 0, empty stdout, permission error on stderr)
+    silent_fail_proc = MagicMock()
+    silent_fail_proc.stdout = io.StringIO(
+        json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": ""}}) + "\n"
+    )
+    silent_fail_proc.stderr = io.StringIO(
+        "jetski: no output produced — a tool required the 'command' permission that headless mode cannot prompt for, so it was auto-denied.\n"
+    )
+    silent_fail_proc.wait.return_value = 0
+
+    with patch("subprocess.Popen", return_value=silent_fail_proc):
+        fail_res = conn.run_prompt("run a shell command", language_mode="asm")
+    assert fail_res.success is False
+    assert fail_res.error_message is not None
+    assert "headless mode" in fail_res.error_message
+    assert "auto" in fail_res.error_message
+
+
+def test_c64_studio_live_streaming_and_external_cli_sync(tk_app, tmp_path, monkeypatch):
+    """Verify live editor preview during token streaming and external CLI file/MCP sync into C64 Studio."""
+    from unittest.mock import patch
+    from c64u_bridge.agy_cli import AgyPromptResult, AgyStatus, ExtractedCodeBlock
+    from c64u_bridge.server import emit_studio_bridge_event
+
+    app = tk_app
+    installed_status = AgyStatus(
+        installed=True,
+        binary_path=tmp_path / "agy.exe",
+        version="1.5.6",
+        mcp_configured=True,
+        status_message="Antigravity CLI v1.5.6 detected",
+    )
+
+    asm_code = "BasicUpstart2(start)\n* = $0810\nstart:\n    lda #$05\n    sta $d020\n    jmp start\n"
+    streamed_snapshots: list[str] = []
+
+    def _fake_streaming_run_prompt(prompt, **kwargs):
+        on_status = kwargs.get("on_status")
+        on_delta = kwargs.get("on_delta")
+        if on_status:
+            on_status("AGY CONNECTED (1234abcd) — READING C64 CONTEXT...")
+            on_status("AGY THINKING...")
+        if on_delta:
+            on_delta("Streaming ASM:\n```asm\nBasicUpstart2(start)\n* = $0810\nstart:\n    lda #$05\n")
+            streamed_snapshots.append(app.asm_text.get("1.0", "end-1c"))
+            on_delta("    sta $d020\n    jmp start\n```\n")
+        return AgyPromptResult(
+            success=True,
+            response_text=f"Streaming ASM:\n```asm\n{asm_code}```",
+            stderr="",
+            return_code=0,
+            command=["agy"],
+            code_blocks=[ExtractedCodeBlock(language_tag="asm", studio_mode="asm", code=asm_code)],
+        )
+
+    with patch.object(app.agy, "detect_cli", return_value=installed_status), patch.object(
+        app.agy, "run_prompt", side_effect=_fake_streaming_run_prompt
+    ):
+        app.agy_auto_apply_var.set(True)
+        app.agy_prompt_var.set("Set the border color to green in KickAssembler")
+        app.action_send_agy_prompt()
+        app.root.update_idletasks()
+
+    # Verified mid-stream live preview populated asm_text BEFORE run_prompt even finished
+    assert streamed_snapshots and "lda #$05" in streamed_snapshots[0]
+    assert app.file_mode == "asm"
+    assert app._active_tab == "tab-asm"
+    assert "sta $d020" in app.asm_text.get("1.0", "end-1c")
+    assert "AGY CONNECTED" in app.agy_chat_text.get("1.0", "end-1c")
+
+    # Test external CLI workspace file sync + MCP bridge event journal tailing
+    events_file = tmp_path / "studio_events.jsonl"
+    monkeypatch.setenv("C64U_STUDIO_EVENTS_FILE", str(events_file))
+    old_ws = app.agy.workspace_dir
+    try:
+        app.agy.workspace_dir = tmp_path
+        app.agy_watch_cli_var.set(True)
+        app._init_external_cli_watch_state()
+
+        ext_asm = tmp_path / "cli_created.asm"
+        ext_asm.write_text(
+            "BasicUpstart2(main)\n* = $0810\nmain:\n    lda #$02\n    sta $d020\n    rts\n",
+            encoding="utf-8",
+        )
+        app._poll_external_cli_activity()
+        app.root.update_idletasks()
+
+        assert app.loaded_file == ext_asm.resolve()
+        assert app.file_mode == "asm"
+        assert app.agy_lang_var.get() == "asm"
+        assert "lda #$02" in app.asm_text.get("1.0", "end-1c")
+        assert "Live-synced `cli_created.asm`" in app.agy_chat_text.get("1.0", "end-1c")
+
+        # Unsaved manual edits in editor must NOT be overwritten by external disk changes
+        app.asm_text.insert("end-1c", "\n    // manual unsaved edit\n")
+        assert app._is_editor_dirty() is True
+        ext_asm.write_text(
+            "BasicUpstart2(main)\n* = $0810\nmain:\n    lda #$07\n    sta $d020\n    rts\n",
+            encoding="utf-8",
+        )
+        app._poll_external_cli_activity()
+        assert "manual unsaved edit" in app.asm_text.get("1.0", "end-1c")
+        assert "unsaved editor edits preserved" in app.agy_chat_text.get("1.0", "end-1c")
+
+        # Reset clean state and verify MCP bridge journal events show up live in C64 Studio
+        app._mark_editor_synced()
+        fake_prg = tmp_path / "cli_created.prg"
+        fake_prg.write_bytes(b"\x01\x08\x00")
+        emit_studio_bridge_event(
+            "start",
+            "c64_build_and_run",
+            summary="Building & DMA-running cli_created.asm (kickass)",
+            source_path=ext_asm,
+        )
+        emit_studio_bridge_event(
+            "done",
+            "c64_build_and_run",
+            ok=True,
+            summary="Built cli_created.asm -> cli_created.prg (3 bytes) & DMA launched on C64U",
+            source_path=ext_asm,
+            prg_path=fake_prg,
+        )
+        app._poll_external_cli_activity()
+        chat_dump = app.agy_chat_text.get("1.0", "end-1c")
+        assert "[CLI → MCP] Building & DMA-running cli_created.asm" in chat_dump
+        assert "[CLI → MCP] Built cli_created.asm -> cli_created.prg" in chat_dump
+        assert app.last_prg_path == fake_prg.resolve()
+    finally:
+        app.agy.workspace_dir = old_ws
+
+
+def test_single_screen_editor_and_asm_toggle_workflow(tk_app, tmp_path):
+    """Verify the unified single-screen editor, Show ASM toggle, PY->ASM promotion, and single-editor agy_cli focus."""
+    from unittest.mock import patch
+    from c64u_bridge.agy_cli import AgyPromptResult, AgyStatus, ExtractedCodeBlock
+
+    app = tk_app
+
+    # 1. Single-screen workspace: only one unified pane in workspace_frame (no side-by-side split)
+    assert len(app.workspace_frame.winfo_children()) == 1
+    assert app.workspace_frame.winfo_children()[0] is app.right_pane
+
+    # 2. Python mode displays ONLY source_view_frame (py_text), hiding asm_view_frame
+    app.action_select_language("py")
+    app._set_python_text('print("HELLO SINGLE SCREEN")\n')
+    assert app.file_mode == "py"
+    assert app.asm_focus_mode is False
+    assert app.source_view_frame.winfo_manager() == "pack"
+    assert app.asm_view_frame.winfo_manager() == ""
+    assert "SHOW ASM" in app.btn_show_asm.cget("text")
+
+    # 3. Toggling btn_show_asm auto-transpiles Python -> 6502 ASM and swaps to asm_view_frame
+    app.btn_show_asm.invoke()
+    assert app.asm_focus_mode is True
+    assert app.asm_view_frame.winfo_manager() == "pack"
+    assert app.source_view_frame.winfo_manager() == ""
+    assert "HIDE ASM" in app.btn_show_asm.cget("text")
+    assert app.btn_back_to_source.winfo_manager() == "pack"
+    assert app.btn_promote_asm.winfo_manager() == "pack"
+    assert "HELLO SINGLE SCREEN" in app.asm_text.get("1.0", "end-1c").upper() or "$FFD2" in app.asm_text.get(
+        "1.0", "end-1c"
+    ).upper()
+
+    # 4. Clicking '⬅ BACK TO PYTHON (^E)' hides ASM and restores the single Python editor
+    app.btn_back_to_source.invoke()
+    assert app.asm_focus_mode is False
+    assert app.source_view_frame.winfo_manager() == "pack"
+    assert app.asm_view_frame.winfo_manager() == ""
+
+    # 5. Source comment toggle handles '#' in Python mode and '//' in C mode
+    app.py_text.mark_set("insert", "1.0")
+    app.action_toggle_source_comment()
+    assert app.py_text.get("1.0", "1.end").startswith("# ")
+    app.action_toggle_source_comment()
+    assert app.py_text.get("1.0", "1.end").startswith("print(")
+
+    # 6. Clicking '⚡ PY → ASM' converts and opens ASM view; '✎ EDIT AS .ASM' promotes to native ASM mode
+    app.btn_py_to_asm.invoke()
+    assert app.asm_focus_mode is True
+    assert app.asm_view_frame.winfo_manager() == "pack"
+
+    app.btn_promote_asm.invoke()
+    assert app.file_mode == "asm"
+    assert app.asm_focus_mode is False
+    assert app.asm_view_frame.winfo_manager() == "pack"
+    assert app.source_view_frame.winfo_manager() == ""
+    assert app.btn_back_to_source.winfo_manager() == ""
+    assert app.btn_promote_asm.winfo_manager() == ""
+
+    # 7. agy_cli with AUTO-APPLY stays focused on the single main editor while streaming Python code
+    app.action_select_language("py")
+    installed_status = AgyStatus(
+        installed=True,
+        binary_path=tmp_path / "agy.exe",
+        version="1.5.6",
+        mcp_configured=True,
+        status_message="Antigravity CLI v1.5.6 detected",
+    )
+    py_code = 'BORDER_COLOR = 0xD020\npoke(BORDER_COLOR, 6)\nprint("STREAMED IN MAIN EDITOR")\n'
+    active_tabs_during_stream: list[str] = []
+    source_packed_during_stream: list[str] = []
+
+    def _fake_py_stream(_prompt, **kwargs):
+        on_delta = kwargs.get("on_delta")
+        if on_delta:
+            on_delta(f"```python\n{py_code}```\n")
+            active_tabs_during_stream.append(app._active_tab)
+            source_packed_during_stream.append(app.source_view_frame.winfo_manager())
+        return AgyPromptResult(
+            success=True,
+            response_text=f"```python\n{py_code}```",
+            stderr="",
+            return_code=0,
+            command=["agy"],
+            code_blocks=[ExtractedCodeBlock(language_tag="python", studio_mode="py", code=py_code)],
+        )
+
+    with patch.object(app.agy, "detect_cli", return_value=installed_status), patch.object(
+        app.agy, "run_prompt", side_effect=_fake_py_stream
+    ):
+        app.agy_auto_apply_var.set(True)
+        app.agy_lang_var.set("py")
+        app.agy_prompt_var.set("Write a Python C64 border color test")
+        app.action_send_agy_prompt()
+        app.root.update_idletasks()
+
+    assert active_tabs_during_stream == ["tab-asm"]
+    assert source_packed_during_stream == ["pack"]
+    assert app._active_tab == "tab-asm"
+    assert app.file_mode == "py"
+    assert app.source_view_frame.winfo_manager() == "pack"
+    assert app.asm_view_frame.winfo_manager() == ""
+    assert "STREAMED IN MAIN EDITOR" in app.py_text.get("1.0", "end-1c")
+
+    # Pure Q&A response (no code blocks) switches to 5:AI CONSOLE so the user can read the answer
+    def _fake_qa_stream(_prompt, **_kwargs):
+        return AgyPromptResult(
+            success=True,
+            response_text="The VIC-II border color register is at $D020 (53280).",
+            stderr="",
+            return_code=0,
+            command=["agy"],
+            code_blocks=[],
+        )
+
+    with patch.object(app.agy, "detect_cli", return_value=installed_status), patch.object(
+        app.agy, "run_prompt", side_effect=_fake_qa_stream
+    ):
+        app.agy_prompt_var.set("What address is the border color register?")
+        app.action_send_agy_prompt()
+        app.root.update_idletasks()
+
+    assert app._active_tab == "tab-agy"
+
+

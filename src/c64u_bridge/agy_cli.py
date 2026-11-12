@@ -12,11 +12,13 @@ Supports:
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -82,6 +84,8 @@ class AgyPromptResult:
     command: List[str]
     code_blocks: List[ExtractedCodeBlock] = field(default_factory=list)
     error_message: Optional[str] = None
+    touched_files: List[Path] = field(default_factory=list)
+    conversation_id: Optional[str] = None
 
     @property
     def primary_code_block(self) -> Optional[ExtractedCodeBlock]:
@@ -91,21 +95,45 @@ class AgyPromptResult:
         return max(self.code_blocks, key=lambda b: len(b.code))
 
 
+_SKIPPED_FENCE_TAGS = {
+    "bash",
+    "sh",
+    "zsh",
+    "powershell",
+    "ps1",
+    "cmd",
+    "bat",
+    "json",
+    "toml",
+    "yaml",
+    "markdown",
+    "md",
+    "text",
+    "txt",
+}
+
+
 def classify_code_block(lang_tag: str, code: str, preferred_mode: str = "asm") -> str:
-    """Map a markdown code fence tag or code heuristics to 'asm', 'c', or 'py'."""
+    """Map a markdown code fence tag or code heuristics to 'asm', 'c', 'py', or 'def'."""
     tag = (lang_tag or "").strip().lower()
     if tag in {"asm", "s", "6502", "6510", "kickass", "kickassembler", "acme", "ca65"}:
         return "asm"
     if tag in {"c", "cpp", "c++", "cc", "cxx", "h", "hpp", "oscar64", "cc65"}:
         return "c"
     if tag in {"py", "python", "python3"}:
-        return "py"
+        return "def" if preferred_mode == "def" else "py"
 
     # Content-based fallback when fence has no language tag
     if "#include" in code or "int main(" in code or "void main(" in code:
         return "c"
-    if "BasicUpstart2" in code or re.search(r"^\s*(lda|sta|ldx|ldy|jsr|jmp|sei)\b", code, re.IGNORECASE | re.MULTILINE):
+    if "BasicUpstart2" in code or re.search(
+        r"^\s*(lda|sta|ldx|ldy|jsr|jmp|sei)\b", code, re.IGNORECASE | re.MULTILINE
+    ):
         return "asm"
+    if preferred_mode == "def" and (
+        "PATTERNS" in code or "SPRITES" in code or "STEPS" in code or "TILES" in code or "LEVELS" in code
+    ):
+        return "def"
     if "def " in code or "while True:" in code or "border_color(" in code or "wait_raster(" in code:
         return "py"
     return preferred_mode
@@ -119,8 +147,8 @@ def extract_code_blocks(markdown_text: str, preferred_mode: str = "asm") -> List
         raw_code = match.group(2).strip("\r\n")
         if not raw_code.strip():
             continue
-        # Skip tiny shell/install snippets if they are bash/sh/powershell/json
-        if raw_tag.strip().lower() in {"bash", "sh", "zsh", "powershell", "ps1", "cmd", "bat", "json", "toml", "yaml"}:
+        # Skip tiny shell/install/config snippets
+        if raw_tag.strip().lower() in _SKIPPED_FENCE_TAGS:
             continue
         mode = classify_code_block(raw_tag, raw_code, preferred_mode=preferred_mode)
         blocks.append(
@@ -133,6 +161,48 @@ def extract_code_blocks(markdown_text: str, preferred_mode: str = "asm") -> List
     return blocks
 
 
+def extract_streaming_code_preview(
+    markdown_text: str,
+    preferred_mode: str = "asm",
+) -> Optional[ExtractedCodeBlock]:
+    """
+    Extract an in-progress (unclosed) or completed fenced code block from partial
+    streaming markdown so C64 Studio can live-render generated code in the editor.
+    """
+    if not markdown_text:
+        return None
+    # Check if there is a trailing unclosed ```<tag>\n<code> block actively streaming
+    remainder = CODE_BLOCK_RE.sub("", markdown_text)
+    open_match = re.search(r"```([a-zA-Z0-9_+-]*)[ \t]*\r?\n(.*)$", remainder, re.DOTALL)
+    if open_match:
+        raw_tag = open_match.group(1) or ""
+        raw_code = open_match.group(2).lstrip("\r\n")
+        if raw_code.strip() and raw_tag.strip().lower() not in _SKIPPED_FENCE_TAGS:
+            mode = classify_code_block(raw_tag, raw_code, preferred_mode=preferred_mode)
+            return ExtractedCodeBlock(
+                language_tag=raw_tag.strip().lower() or mode,
+                studio_mode=mode,
+                code=raw_code,
+            )
+
+    completed = extract_code_blocks(markdown_text, preferred_mode=preferred_mode)
+    if completed:
+        return max(completed, key=lambda b: len(b.code))
+    return None
+
+
+def infer_prompt_language(user_prompt: str, fallback_mode: str = "asm") -> str:
+    """Detect when a prompt explicitly asks for Assembly, C/Oscar64, or Python."""
+    low = (user_prompt or "").lower()
+    if re.search(r"\b(kickassembler|kickass|6502\s+asm|6502\s+assembly|in\s+assembly|in\s+asm|\.asm)\b", low):
+        return "asm"
+    if re.search(r"\b(oscar64|cc65|in\s+c\+\+|in\s+c99|in\s+c\b|\.c\b)", low):
+        return "c"
+    if re.search(r"\b(in\s+python|python-to-6502|\.py\b)", low) and fallback_mode != "def":
+        return "py"
+    return fallback_mode
+
+
 def build_c64_prompt(
     user_prompt: str,
     language_mode: str = "asm",
@@ -141,8 +211,8 @@ def build_c64_prompt(
     include_code_context: bool = True,
 ) -> str:
     """
-    Wrap the user's prompt with concise C64 Studio target guidance so `agy` emits
-    immediately compilable 6502 Assembly, C (Oscar64/CC65), or C64-Python code.
+    Wrap the user's prompt with concise C64 Studio target guidance so `agy` streams
+    immediately compilable 6502 Assembly, C (Oscar64/CC65), C64-Python, or Game Dev asset code.
     """
     # Pass slash commands through verbatim
     stripped = user_prompt.strip()
@@ -157,6 +227,14 @@ def build_c64_prompt(
             "memory-mapped registers at 0x0400, 0xD800, 0xD020, 0xD021, 0xD400 so it compiles cleanly)."
         )
         fence_tag = "c"
+    elif language_mode == "def":
+        lang_guidance = (
+            "Target Platform: C64 Studio Game Dev Python Asset / Build Definition.\n"
+            "Return the complete updated Python definition file inside a single ```python fenced block, "
+            "preserving the file's top-level schema constants (such as `INSTRUMENTS`/`PATTERNS`/`ORDERS`, "
+            "`SPRITES`, `TILES`/`MAP`, `STEPS`, or `LEVELS`) so F7 builds it cleanly."
+        )
+        fence_tag = "python"
     elif language_mode == "py":
         lang_guidance = (
             "Target Platform: C64 Studio Python-to-6502 AST Transpiler.\n"
@@ -175,9 +253,18 @@ def build_c64_prompt(
         )
         fence_tag = "asm"
 
+    ide_fast_path = (
+        "IDE Execution Note: You are streaming live inside the C64 Studio IDE editor window. "
+        "Generate and stream the complete requested code directly in your reply inside the fenced code block "
+        "right away. Do NOT invoke `run_command` / shell commands or spend turns scanning unrelated directories "
+        "unless explicitly asked — C64 Studio automatically loads your fenced code block into the live editor "
+        "and handles compilation and DMA execution."
+    )
+
     parts = [
         f"[C64 Studio IDE Context — Active Language: {language_mode.upper()}]",
         lang_guidance,
+        ide_fast_path,
     ]
     if active_file is not None:
         parts.append(f"Active Workspace File: {active_file}")
@@ -494,7 +581,7 @@ class AgyCliConnector:
             return False, f"Failed to register MCP server with agy: {exc}"
 
     def launch_interactive_terminal(self, initial_args: Optional[List[str]] = None) -> Tuple[bool, str]:
-        """Open `agy` inside a visible OS terminal window (e.g. for first-time sign-in / auth)."""
+        """Open `agy` inside a visible OS terminal window rooted in the workspace."""
         bin_path = self.find_binary()
         if not bin_path:
             return False, "Antigravity CLI (agy) is not installed."
@@ -502,11 +589,22 @@ class AgyCliConnector:
         try:
             if os.name == "nt":
                 subprocess.Popen(
-                    ["cmd.exe", "/c", "start", "Antigravity CLI (agy)", str(bin_path), *extra],
+                    [
+                        "cmd.exe",
+                        "/c",
+                        "start",
+                        "Antigravity CLI (agy) — C64 Studio Live Sync",
+                        "cmd.exe",
+                        "/k",
+                        str(bin_path),
+                        *extra,
+                    ],
                     cwd=self.workspace_dir,
                 )
             elif platform.system() == "Darwin":
-                escaped = " ".join([f'"{bin_path}"', *[f'"{a}"' for a in extra]])
+                escaped = " ".join(
+                    [f'cd "{self.workspace_dir}" && "{bin_path}"', *[f'"{a}"' for a in extra]]
+                )
                 subprocess.Popen(["osascript", "-e", f'tell app "Terminal" to do script "{escaped}"'])
             else:
                 for term in ("x-terminal-emulator", "gnome-terminal", "konsole", "xterm"):
@@ -518,6 +616,20 @@ class AgyCliConnector:
             return True, f"Launched interactive Antigravity CLI terminal ({bin_path.name})."
         except Exception as exc:
             return False, f"Could not open terminal window: {exc}"
+
+    @staticmethod
+    def _summarize_tool_target(params: dict) -> str:
+        """Format a short target hint for live CLI tool status display."""
+        for key in ("Path", "TargetFile", "source_path", "prg_path", "sid_path", "output_path"):
+            val = params.get(key)
+            if isinstance(val, str) and val.strip():
+                return Path(val.strip()).name
+        for key in ("CommandLine", "query", "action"):
+            val = params.get(key)
+            if isinstance(val, str) and val.strip():
+                clean = " ".join(val.strip().split())
+                return clean[:38] + ("..." if len(clean) > 38 else "")
+        return ""
 
     def run_prompt(
         self,
@@ -532,10 +644,14 @@ class AgyCliConnector:
         model: str = "",
         effort: str = "",
         on_line: Optional[Callable[[str], None]] = None,
+        on_delta: Optional[Callable[[str], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
+        on_file_write: Optional[Callable[[Path, Optional[str]], None]] = None,
     ) -> AgyPromptResult:
         """
-        Execute a prompt via `agy --print` in the workspace directory, streaming output lines
-        in real time via `on_line` and extracting any generated C64 code blocks.
+        Execute a prompt via `agy --output-format stream-json -p` in the workspace directory,
+        streaming live tokens (`on_delta`), lines (`on_line`), tool/thinking status (`on_status`),
+        and direct file writes (`on_file_write`) in real time.
         """
         bin_path = self.find_binary()
         if not bin_path:
@@ -568,15 +684,44 @@ class AgyCliConnector:
             cmd.extend(["--model", model.strip()])
         if effort.strip():
             cmd.extend(["--effort", effort.strip()])
-        cmd.extend(["-p", full_prompt])
+        cmd.extend(["--output-format", "stream-json", "-p", full_prompt])
 
-        stdout_lines: List[str] = []
-        stderr_text = ""
+        text_chunks: List[str] = []
+        line_buffer = ""
+        stderr_chunks: List[str] = []
+        touched_files: List[Path] = []
+        conv_id: Optional[str] = None
+        result_error: Optional[str] = None
+        file_write_tools = {
+            "write_file",
+            "edit_file",
+            "create_file",
+            "replace_file_content",
+            "multi_replace_file_content",
+        }
+
+        def _emit_delta(delta: str) -> None:
+            nonlocal line_buffer
+            if not delta:
+                return
+            text_chunks.append(delta)
+            if on_delta is not None:
+                on_delta(delta)
+            if on_line is not None:
+                line_buffer += delta
+                while "\n" in line_buffer:
+                    ln, line_buffer = line_buffer.split("\n", 1)
+                    on_line(ln.rstrip("\r"))
+
+        def _emit_status(msg: str) -> None:
+            if on_status is not None and msg:
+                on_status(msg)
 
         try:
             proc = subprocess.Popen(
                 cmd,
                 cwd=self.workspace_dir,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -586,37 +731,174 @@ class AgyCliConnector:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             assert proc.stdout is not None
-            for line in proc.stdout:
-                clean_line = line.rstrip("\r\n")
-                stdout_lines.append(clean_line)
-                if on_line is not None:
-                    on_line(clean_line)
 
-            if proc.stderr is not None:
-                stderr_text = proc.stderr.read() or ""
+            def _drain_stderr() -> None:
+                if proc.stderr is not None:
+                    try:
+                        data = proc.stderr.read()
+                        if data:
+                            stderr_chunks.append(data)
+                    except Exception:
+                        pass
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
+
+            for raw_line in proc.stdout:
+                clean_line = raw_line.rstrip("\r\n")
+                if not clean_line:
+                    continue
+
+                parsed_evt = None
+                stripped_ln = clean_line.lstrip()
+                if stripped_ln.startswith("{"):
+                    try:
+                        cand = json.loads(stripped_ln)
+                        if isinstance(cand, dict) and "event" in cand:
+                            parsed_evt = cand
+                    except Exception:
+                        parsed_evt = None
+
+                if parsed_evt is None:
+                    # Plain-text stdout fallback (compatible with mocks or non-JSON CLI output)
+                    _emit_delta(clean_line + "\n")
+                    continue
+
+                evt_type = parsed_evt.get("event")
+                if evt_type == "init":
+                    conv_id = parsed_evt.get("conversation_id") or conv_id
+                    short_id = conv_id[:8] if isinstance(conv_id, str) and conv_id else "ready"
+                    _emit_status(f"AGY CONNECTED ({short_id}) — READING C64 CONTEXT...")
+
+                elif evt_type == "step_update":
+                    su = parsed_evt.get("step_update") or {}
+                    step_type = su.get("step_type", "")
+                    state = su.get("state", "")
+
+                    if step_type == "user_input" and state == "DONE":
+                        _emit_status("AGY THINKING...")
+                    elif su.get("thinking_delta"):
+                        _emit_status("AGY REASONING...")
+                    elif step_type == "agent_response":
+                        td = su.get("text_delta") or ""
+                        if td:
+                            _emit_delta(td)
+                            _emit_status("AGY STREAMING CODE...")
+                        elif state == "DONE":
+                            _emit_status("AGY PREPARING NEXT STEP...")
+                    elif step_type == "tool":
+                        t_info = su.get("tool_info") or {}
+                        t_name = su.get("tool_name") or t_info.get("name") or "tool"
+                        params = t_info.get("parameters") or {}
+                        target_hint = self._summarize_tool_target(params) if isinstance(params, dict) else ""
+                        label = f"{t_name} ({target_hint})" if target_hint else t_name
+
+                        if state == "ACTIVE":
+                            _emit_status(f"AGY TOOL: {label}")
+                        elif state == "DONE":
+                            if t_name in file_write_tools and isinstance(params, dict):
+                                raw_p = params.get("Path") or params.get("TargetFile")
+                                if isinstance(raw_p, str) and raw_p.strip():
+                                    p_obj = Path(raw_p.strip())
+                                    resolved = (
+                                        p_obj if p_obj.is_absolute() else (self.workspace_dir / p_obj)
+                                    ).resolve()
+                                    if resolved not in touched_files:
+                                        touched_files.append(resolved)
+                                    disk_txt: Optional[str] = None
+                                    if resolved.is_file():
+                                        try:
+                                            disk_txt = resolved.read_text(encoding="utf-8")
+                                        except Exception:
+                                            disk_txt = params.get("Content")
+                                    elif isinstance(params.get("Content"), str):
+                                        disk_txt = params.get("Content")
+                                    if on_file_write is not None:
+                                        on_file_write(resolved, disk_txt)
+                        elif state == "ERROR":
+                            _emit_status(f"AGY TOOL BLOCKED: {label}")
+
+                elif evt_type == "result":
+                    res_obj = parsed_evt.get("result") or {}
+                    conv_id = res_obj.get("conversation_id") or conv_id
+                    final_resp = res_obj.get("response") or ""
+                    if final_resp and not "".join(text_chunks).strip():
+                        _emit_delta(final_resp)
+                    status_val = res_obj.get("status")
+                    if status_val not in (None, "SUCCESS"):
+                        result_error = res_obj.get("error") or f"Antigravity CLI returned status: {status_val}"
+
+                elif evt_type == "error":
+                    err_obj = parsed_evt.get("error")
+                    result_error = str(err_obj) if err_obj else "Antigravity CLI reported an error event."
+
+            if line_buffer and on_line is not None:
+                on_line(line_buffer.rstrip("\r"))
+                line_buffer = ""
+
             rc = proc.wait()
-            response_text = "\n".join(stdout_lines).strip()
+            stderr_thread.join(timeout=2.0)
+            stderr_text = "".join(stderr_chunks)
+            response_text = "".join(text_chunks).strip()
             blocks = extract_code_blocks(response_text, preferred_mode=language_mode)
 
+            # Fallback: if `agy` wrote code directly to a workspace file via write_file/edit_file
+            # without repeating a fenced markdown block in chat, extract code from the written file.
+            if not blocks and touched_files:
+                for tf in reversed(touched_files):
+                    if tf.is_file() and tf.suffix.lower() in {".asm", ".s", ".c", ".cpp", ".cc", ".cxx", ".py"}:
+                        try:
+                            file_code = tf.read_text(encoding="utf-8")
+                            if file_code.strip():
+                                ext_tag = tf.suffix.lstrip(".").lower()
+                                f_mode = classify_code_block(ext_tag, file_code, preferred_mode=language_mode)
+                                blocks.append(
+                                    ExtractedCodeBlock(
+                                        language_tag=ext_tag,
+                                        studio_mode=f_mode,
+                                        code=file_code if file_code.endswith("\n") else file_code + "\n",
+                                    )
+                                )
+                                break
+                        except Exception:
+                            pass
+
             err_msg: Optional[str] = None
-            if rc != 0:
-                err_msg = (stderr_text.strip() or response_text or f"agy exited with status {rc}")
+            has_silent_headless_failure = (
+                not response_text and not blocks and not touched_files and bool(stderr_text.strip())
+            )
+            if rc != 0 or result_error or has_silent_headless_failure:
+                err_msg = (
+                    result_error
+                    or stderr_text.strip()
+                    or response_text
+                    or f"agy exited with status {rc}"
+                )
+                if "permission" in err_msg.lower() and "headless" in err_msg.lower():
+                    err_msg += (
+                        "\n💡 Tip: Switch MODE from 'accept-edits' to 'auto' in the 5:AGY AI toolbar "
+                        "when you want Antigravity to execute shell or hardware commands autonomously."
+                    )
 
             return AgyPromptResult(
-                success=(rc == 0),
+                success=(err_msg is None),
                 response_text=response_text,
                 stderr=stderr_text,
                 return_code=rc,
                 command=cmd,
                 code_blocks=blocks,
                 error_message=err_msg,
+                touched_files=touched_files,
+                conversation_id=conv_id,
             )
         except Exception as exc:
             return AgyPromptResult(
                 success=False,
-                response_text="\n".join(stdout_lines),
-                stderr=stderr_text,
+                response_text="".join(text_chunks),
+                stderr="".join(stderr_chunks),
                 return_code=-1,
                 command=cmd,
                 error_message=f"Antigravity CLI execution error: {exc}",
+                touched_files=touched_files,
+                conversation_id=conv_id,
             )

@@ -8,6 +8,8 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +17,48 @@ from .client import C64UClient, C64UClientError
 from .compiler import CrossCompiler
 from .screen import format_screen
 from .validation_report import DeploymentValidator
+
+
+def get_studio_event_journal_path() -> Path:
+    """Return the shared local JSONL journal path used to sync external CLI/MCP calls into C64 Studio."""
+    override = os.getenv("C64U_STUDIO_EVENTS_FILE")
+    if override:
+        return Path(override)
+    return Path(tempfile.gettempdir()) / "c64u_studio_bridge_events.jsonl"
+
+
+def emit_studio_bridge_event(
+    phase: str,
+    tool_name: str,
+    *,
+    summary: str = "",
+    source_path: Optional[Path] = None,
+    prg_path: Optional[Path] = None,
+    sid_path: Optional[Path] = None,
+    ok: bool = True,
+) -> None:
+    """Append a non-blocking activity event so an open C64 Studio window reflects external CLI actions live."""
+    try:
+        journal = get_studio_event_journal_path()
+        if journal.is_file() and journal.stat().st_size > 262_144:
+            # Keep the rolling journal compact
+            tail_lines = journal.read_text(encoding="utf-8", errors="ignore").splitlines()[-50:]
+            journal.write_text("\n".join(tail_lines) + ("\n" if tail_lines else ""), encoding="utf-8")
+        payload = {
+            "ts": time.time(),
+            "pid": os.getpid(),
+            "phase": phase,
+            "tool": tool_name,
+            "ok": ok,
+            "summary": summary,
+            "source_path": str(source_path.resolve()) if source_path else None,
+            "prg_path": str(prg_path.resolve()) if prg_path else None,
+            "sid_path": str(sid_path.resolve()) if sid_path else None,
+        }
+        with journal.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
 
 
 def create_tool_definitions() -> List[Dict[str, Any]]:
@@ -222,7 +266,14 @@ class MCPServerHandler:
         try:
             if name == "c64_build_and_run":
                 src_path = args.get("source_path")
+                src_obj = Path(src_path) if src_path else None
                 assembler = args.get("assembler", "auto")
+                emit_studio_bridge_event(
+                    "start",
+                    name,
+                    summary=f"Building & DMA-running {src_obj.name if src_obj else 'source'} ({assembler})",
+                    source_path=src_obj if (src_obj and src_obj.exists()) else None,
+                )
                 result = self.compiler.compile(src_path, assembler=assembler)
                 if not result.success:
                     report = self.validator.validate_deployment(
@@ -232,6 +283,13 @@ class MCPServerHandler:
                         assembler_used=assembler,
                         execution_mode="DMA_RUN",
                         load_and_exec_success=False,
+                    )
+                    emit_studio_bridge_event(
+                        "done",
+                        name,
+                        ok=False,
+                        summary=f"Compilation failed for {src_obj.name if src_obj else 'source'}: {result.error_message or 'error'}",
+                        source_path=src_obj if (src_obj and src_obj.exists()) else None,
                     )
                     return (
                         f"❌ Compilation Failed:\n{result.error_message or result.stderr or result.stdout}\n\n"
@@ -249,6 +307,17 @@ class MCPServerHandler:
                     load_and_exec_success=True,
                     runner_response=str(res),
                 )
+                emit_studio_bridge_event(
+                    "done",
+                    name,
+                    ok=True,
+                    summary=(
+                        f"Built {Path(src_path).name} -> {result.output_prg.name} "
+                        f"({report.prg_size_bytes} bytes) & DMA launched on C64U"
+                    ),
+                    source_path=src_obj if (src_obj and src_obj.exists()) else None,
+                    prg_path=result.output_prg,
+                )
                 return (
                     f"✅ Successfully compiled {Path(src_path).name} to {result.output_prg.name} "
                     f"({report.prg_size_bytes} bytes) and launched on C64U via DMA.\n"
@@ -260,6 +329,12 @@ class MCPServerHandler:
                 prg_path = Path(args.get("prg_path"))
                 if not prg_path.exists():
                     return f"❌ File not found: {prg_path}"
+                emit_studio_bridge_event(
+                    "start",
+                    name,
+                    summary=f"DMA uploading {prg_path.name} to C64U",
+                    prg_path=prg_path,
+                )
                 res = self.client.run_prg(prg_path)
                 report = self.validator.validate_deployment(
                     client=self.client,
@@ -268,6 +343,13 @@ class MCPServerHandler:
                     execution_mode="DMA_RUN",
                     load_and_exec_success=True,
                     runner_response=str(res),
+                )
+                emit_studio_bridge_event(
+                    "done",
+                    name,
+                    ok=True,
+                    summary=f"DMA executed {prg_path.name} on C64U",
+                    prg_path=prg_path,
                 )
                 return (
                     f"✅ Executed {prg_path.name} on C64U via DMA: {res}\n\n"
@@ -283,6 +365,13 @@ class MCPServerHandler:
                 song = args.get("song")
                 res = self.client.play_sid(sid_path, song=int(song) if song is not None else None)
                 tune = f"subtune {song}" if song is not None else "default subtune"
+                emit_studio_bridge_event(
+                    "done",
+                    name,
+                    ok=True,
+                    summary=f"Playing {sid_path.name} ({tune}) on C64U SID player",
+                    sid_path=sid_path,
+                )
                 return f"✅ Playing {sid_path.name} ({tune}) on the C64U SID player: {res}"
 
             elif name == "c64_compile_sid":
@@ -299,6 +388,14 @@ class MCPServerHandler:
                     compiler=self.compiler,
                 )
                 h = result.sid.header
+                emit_studio_bridge_event(
+                    "done",
+                    name,
+                    ok=True,
+                    summary=f"Compiled {source_path.name} -> {result.output_sid.name} ({result.payload_size} bytes)",
+                    source_path=source_path,
+                    sid_path=result.output_sid,
+                )
                 return (
                     f"✅ Compiled {source_path.name} to {result.output_sid.name} "
                     f"({result.payload_size} bytes, load ${h.load_address:04X}, "
