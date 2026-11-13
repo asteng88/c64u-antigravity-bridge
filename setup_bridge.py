@@ -143,7 +143,7 @@ ADOPTIUM_JRE17_WIN64_URL = (
 OSCAR64_RELEASES_API = "https://api.github.com/repos/drmortalwombat/oscar64/releases/latest"
 C64_STUDIO_GITHUB_REPO = os.getenv("C64_STUDIO_GITHUB_REPO", "asteng88/c64u-antigravity-bridge")
 VERSION_STAMP_FILE = ".c64_studio_version"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 
 
 def _parse_version(version_str: str) -> Tuple[int, ...]:

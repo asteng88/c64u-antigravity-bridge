@@ -5885,6 +5885,9 @@ class C64StudioApp:
 
     def action_transpile_code(self, silent: bool = False) -> bool:
         """Transpile Python (MOS 6502 Dialect) source into 6502 Assembly."""
+        if self.file_mode == "c":
+            self._assemble_current(package_extra=False)
+            return self._last_compile_error is None
         if self.file_mode == "def":
             if not silent:
                 self.notify("THIS FILE IS BUILT WITH F7, NOT TRANSPILED", severity="warning")
@@ -6492,7 +6495,7 @@ class C64StudioApp:
         """Extract a 1-based source line number from KickAssembler, Oscar64, CC65, or Python diagnostics."""
         for pat in (
             r"(?:at line\s+|line\s+)(\d+)",
-            r"\((\d+)(?::\d+)?\)",
+            r"\((\d+)(?:[:,]\s*\d+)?\)",
             r":(\d+):\d*:",
             r":(\d+):",
         ):
@@ -6810,7 +6813,12 @@ class C64StudioApp:
                 target_c = self.loaded_file
             else:
                 tmp_dir = str(self.loaded_file.parent) if (self.loaded_file and self.loaded_file.parent.is_dir()) else None
-                with tempfile.NamedTemporaryFile(suffix=".c", dir=tmp_dir, delete=False) as tmp:
+                c_suffix = (
+                    self.loaded_file.suffix
+                    if (self.loaded_file and self.loaded_file.suffix.lower() in (".c", ".cpp", ".cc", ".cxx"))
+                    else ".c"
+                )
+                with tempfile.NamedTemporaryFile(suffix=c_suffix, dir=tmp_dir, delete=False) as tmp:
                     tmp.write(c_source.encode("utf-8"))
                     target_c = temp_c = Path(tmp.name)
             detected_cc = self.compiler.detect_assembler(target_c)
@@ -6822,13 +6830,27 @@ class C64StudioApp:
                 self.last_prg_path = out_prg
                 sz = out_prg.stat().st_size
                 self._write_log(f"✓ Compiled {out_prg.name} ({sz} bytes) via {detected_cc.upper()}")
-                try:
-                    dec = decompile_prg(out_prg.read_bytes(), name=out_prg.stem)
-                    self.last_asm = dec.assembly
-                    self._set_asm_text(dec.assembly)
-                    self._write_log(f"  ↳ Disassembled {dec.instruction_count:,} optimized 6502 instructions into ASM view.")
-                except Exception:
-                    pass
+                asm_loaded = False
+                if comp_res.asm_file and comp_res.asm_file.is_file():
+                    try:
+                        asm_listing = comp_res.asm_file.read_text(encoding="utf-8", errors="ignore")
+                        if asm_listing.strip():
+                            self.last_asm = asm_listing
+                            self._set_asm_text(asm_listing)
+                            asm_loaded = True
+                            self._write_log(
+                                f"  ↳ Loaded {detected_cc.upper()} 6502 assembly listing ({len(asm_listing.splitlines()):,} lines) into ASM view."
+                            )
+                    except Exception:
+                        pass
+                if not asm_loaded:
+                    try:
+                        dec = decompile_prg(out_prg.read_bytes(), name=out_prg.stem)
+                        self.last_asm = dec.assembly
+                        self._set_asm_text(dec.assembly)
+                        self._write_log(f"  ↳ Disassembled {dec.instruction_count:,} optimized 6502 instructions into ASM view.")
+                    except Exception:
+                        pass
                 self.notify(f"COMPILE TEST OK: {out_prg.name} ({sz} BYTES // {detected_cc.upper()})")
                 if package_extra:
                     self._package_built_prg(out_prg)

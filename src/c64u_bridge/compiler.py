@@ -60,6 +60,7 @@ class CompilationResult:
     stdout: str
     stderr: str
     symbol_file: Optional[Path] = None
+    asm_file: Optional[Path] = None
     output_tap: Optional[Path] = None
     output_d64: Optional[Path] = None
     error_message: Optional[str] = None
@@ -284,6 +285,8 @@ class CrossCompiler:
         base_flags: List[str] = []
         if not any(f.startswith("-O") for f in flags):
             base_flags.append("-O2")
+        if not any(f in ("-g", "-gp") for f in flags):
+            base_flags.append("-g")
         if not any(f.startswith("-tf=") for f in flags):
             base_flags.append("-tf=prg")
         if not any(f.startswith("-o=") for f in flags):
@@ -296,12 +299,14 @@ class CrossCompiler:
             if res.returncode == 0 and not out.exists() and default_prg.exists() and default_prg != out:
                 shutil.move(str(default_prg), str(out))
             sym_file = out.with_suffix(".lbl") if out.with_suffix(".lbl").exists() else None
+            asm_file = out.with_suffix(".asm") if out.with_suffix(".asm").exists() else None
             return CompilationResult(
                 success=(res.returncode == 0 and out.exists()),
                 output_prg=out if out.exists() else None,
                 stdout=res.stdout,
                 stderr=res.stderr,
                 symbol_file=sym_file,
+                asm_file=asm_file,
                 error_message=None if res.returncode == 0 else (res.stderr or res.stdout),
             )
         except Exception as e:
@@ -312,7 +317,7 @@ class CrossCompiler:
                 stderr=str(e),
                 error_message=(
                     f"Oscar64 execution error ({self.oscar64_bin}): {e}. "
-                    "Ensure 'oscar64' is on PATH or set OSCAR64_BIN in .env."
+                    "Ensure 'oscar64' is installed in tools/oscar64/bin, on PATH, or set OSCAR64_BIN in .env (run setup_bridge.py)."
                 ),
             )
 

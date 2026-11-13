@@ -533,8 +533,10 @@ def test_oscar64_compiler_detection_and_invocation(tmp_path):
     def _fake_oscar64_run(cmd, **kwargs):
         assert "oscar64" in cmd[0]
         assert "-tf=prg" in cmd
+        assert "-g" in cmd
         assert any(arg.startswith("-o=") for arg in cmd)
         out_prg.write_bytes(bytes([0x01, 0x08, 0xA9, 0x00, 0x8D, 0x20, 0xD0, 0x60]))
+        out_prg.with_suffix(".asm").write_text("; Compiled\nmain:\n0810 : a9 00 __ LDA #$00\n", encoding="utf-8")
 
         class _Res:
             returncode = 0
@@ -547,7 +549,37 @@ def test_oscar64_compiler_detection_and_invocation(tmp_path):
         res = compiler.compile(c_oscar, output_prg=out_prg, assembler="auto")
         assert res.success is True
         assert res.output_prg == out_prg
+        assert res.asm_file == out_prg.with_suffix(".asm")
         assert out_prg.exists()
+
+
+def test_oscar64_real_compile_to_prg_and_asm(tmp_path):
+    """Verify real Oscar64 binary compiles C/C++ to PRG and generates annotated 6502 .asm when installed."""
+    import pytest
+    from c64u_bridge.compiler import CrossCompiler
+
+    compiler = CrossCompiler()
+    if not compiler._is_tool_available(compiler.oscar64_bin):
+        pytest.skip("oscar64 binary not installed")
+
+    src = tmp_path / "border.c"
+    src.write_text(
+        '#include <c64/vic.h>\n'
+        'int main(void) {\n'
+        '    vic.color_border = VCOL_BLUE;\n'
+        '    return 0;\n'
+        '}\n',
+        encoding="utf-8",
+    )
+    out_prg = tmp_path / "border.prg"
+    res = compiler.compile(src, output_prg=out_prg, assembler="oscar64")
+    assert res.success is True, f"Oscar64 failed: {res.error_message}"
+    assert res.output_prg == out_prg and out_prg.is_file()
+    assert res.asm_file is not None and res.asm_file.is_file()
+    asm_text = res.asm_file.read_text(encoding="utf-8", errors="ignore")
+    assert "main:" in asm_text
+    assert "border.c" in asm_text
+
 
 
 

@@ -179,6 +179,14 @@ def find_default_oscar64_bin() -> Optional[str]:
                 if match.is_file():
                     return str(match.resolve())
 
+    if os.name == "nt":
+        for pf_var in ("ProgramFiles(x86)", "ProgramFiles"):
+            pf_dir = os.environ.get(pf_var)
+            if pf_dir:
+                cand = Path(pf_dir) / "oscar64" / "bin" / exe_name
+                if cand.is_file():
+                    return str(cand.resolve())
+
     return shutil.which("oscar64")
 
 

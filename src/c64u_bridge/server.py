@@ -491,7 +491,7 @@ def run_stdio_server():
                         "protocolVersion": "2024-11-05",
                         "serverInfo": {
                             "name": "c64u-antigravity-bridge",
-                            "version": "0.1.0"
+                            "version": "0.1.1"
                         },
                         "capabilities": {
                             "tools": {}
