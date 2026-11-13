@@ -3,7 +3,8 @@ IRONFRONT loading screen - scene file for tools/bitmap/koala_tool.py.
 
 A dusk battlefield: the IRONFRONT logo across the top, the gunship from
 heli_ref.png coming in low, a fireball with a rifle squad silhouetted against
-it, the player tank in front, and the PRESS FIRE TO DEPLOY prompt.
+it, the player tank in front, and the GAME BY STATION88 RETRO credit above
+the PRESS FIRE TO DEPLOY prompt.
 
 Build:  python tools/bitmap/koala_tool.py game_dev/ironfront/loading/loading_scene.py
 Writes loading.kla and loading_review.html. The review page embeds the title
@@ -14,8 +15,16 @@ import json
 import math
 import pathlib
 
-from koala_tool import (BLACK, BLUE, BROWN, DGREY, GREY, H, LGREY, LRED, ORANGE, PURPLE, RED, W, WHITE, YELLOW,
+from koala_tool import (BLACK, BLUE, BROWN, DGREY, FONT3, GREY, H, LGREY, LRED, ORANGE, PURPLE, RED, W, WHITE, YELLOW,
                         bayer, big_text, noise, read_png, small_text, smooth_noise)
+
+FONT3.update({
+    "8": ["###", "#.#", "###", "#.#", "###"],
+    "B": ["##.", "#.#", "##.", "#.#", "##."],
+    "G": ["###", "#..", "#.#", "#.#", "###"],
+    "M": ["#.#", "###", "###", "#.#", "#.#"],
+    "N": ["###", "#.#", "#.#", "#.#", "#.#"],
+})
 
 HERE = pathlib.Path(__file__).resolve().parent
 OUTPUT = "loading"
@@ -140,13 +149,13 @@ SOLDIER = [
 
 def units(cv):
     # soldiers silhouetted against the fireball, charging right behind the tank
-    for i, (x, y) in enumerate(((14, 64), (26, 67), (40, 65), (55, 68))):
+    for i, (x, y) in enumerate(((14, 62), (26, 65), (40, 63), (55, 66))):
         cv.blit(SOLDIER[i % 2], x, y, {"K": BLACK})
     for x in range(52, 98):
-        for y in (87, 88):
+        for y in (84, 85):
             if noise(x, y, 4) < 0.85:
                 cv.put(x, y, BLACK)
-    cv.blit(TANK, 54, 71, {"K": BLACK, "Y": YELLOW, "B": BROWN, "G": GREY})
+    cv.blit(TANK, 54, 68, {"K": BLACK, "Y": YELLOW, "B": BROWN, "G": GREY})
 
 
 def heli_art(path):
@@ -192,6 +201,14 @@ def logo(cv):
     big_text(cv, "IRONFRONT", FONT5, y0=2, scale=3, gap=2, ramp=ramp)
 
 
+def text_band(cv, text, x0, y0, colour):
+    # dark backing strip so text stays crisp and within 3 colours per 4x4 cell
+    for y in range(y0 - 1, min(H, y0 + 6)):
+        for x in range(x0 - 2, x0 + len(text) * 4 + 1):
+            cv.put(x, y, BLACK)
+    small_text(cv, text, x0, y0, colour)
+
+
 def compose(cv):
     sky(cv)
     ground(cv)
@@ -199,7 +216,8 @@ def compose(cv):
     heli_box = helicopter(cv, heli_art(HELI_REF), oy=25)
     units(cv)
     logo(cv)
-    small_text(cv, "PRESS FIRE TO DEPLOY", 41, 93, WHITE)
+    text_band(cv, "BY STATION88 RETRO", 45, 88, YELLOW)
+    text_band(cv, "PRESS FIRE TO DEPLOY", 41, 94, WHITE)
     return {"heli": heli_box}
 
 

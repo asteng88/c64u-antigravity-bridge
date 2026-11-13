@@ -20,6 +20,8 @@ t_need: .text "POWS 00  MUST SAVE 00"
         .byte 0
 t_sub:  .text "RESCUE PROTOCOL"
         .byte 0
+t_by:   .text "BY STATION88 RETRO"
+        .byte 0
 t_fire: .text "PRESS FIRE TO FLY"
         .byte 0
 t_help: .text "JOY OR WASD+SPACE  DOWN+FIRE: BOMB"

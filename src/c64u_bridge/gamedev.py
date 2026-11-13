@@ -16,7 +16,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .env import find_project_root
+from .env import (
+    find_default_kickass_jar,
+    find_project_root,
+    get_app_root,
+    is_frozen,
+    prepend_local_tool_paths,
+)
 
 
 @dataclass(frozen=True)
@@ -59,7 +65,11 @@ WROTE = re.compile(r"^wrote (\S+?):?(?=\s|$)", re.MULTILINE)  # "wrote x.asm: 12
 
 
 def tools_root() -> Path:
-    """Repository root that holds tools/ (package location first, then the working directory)."""
+    """Repository root that holds tools/ (frozen app root first, then package/cwd)."""
+    if is_frozen():
+        app_root = get_app_root()
+        if (app_root / "tools").is_dir():
+            return app_root
     for start in (Path(__file__).resolve().parent, Path.cwd()):
         root = find_project_root(start)
         if (root / "tools").is_dir():
@@ -74,7 +84,10 @@ def default_target_dir() -> Path:
 
 def tool_command(key: str, target: Path) -> list[str]:
     tool = GAME_TOOLS[key]
-    return [sys.executable, str(tools_root() / tool.script), str(target), *tool.extra_args]
+    script_path = str(tools_root() / tool.script)
+    if is_frozen():
+        return [sys.executable, "--run-script", script_path, str(target), *tool.extra_args]
+    return [sys.executable, script_path, str(target), *tool.extra_args]
 
 
 @dataclass
@@ -89,11 +102,33 @@ class ToolResult:
 
 def run_tool(key: str, target: Path, timeout: float = 600, args: tuple[str, ...] = ()) -> ToolResult:
     """Run a tool on a target file and collect its output and the files it wrote."""
+    import os
+
+    root = tools_root()
+    env = prepend_local_tool_paths(os.environ.copy(), root)
+    src_dir = root / "src"
+    if src_dir.is_dir():
+        existing_pp = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{src_dir}{os.pathsep}{existing_pp}" if existing_pp else str(src_dir)
+    jar = find_default_kickass_jar()
+    if jar is not None:
+        env["KICKASS_JAR"] = str(jar)
+
     try:
-        res = subprocess.run([*tool_command(key, target), *args], cwd=tools_root(), capture_output=True, text=True,
-                             timeout=timeout)
+        res = subprocess.run(
+            [*tool_command(key, target), *args],
+            cwd=root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return ToolResult(False, str(exc), [])
     output = (res.stdout + res.stderr).strip()
-    produced = [target.parent / name for name in WROTE.findall(res.stdout)]
+    produced: list[Path] = []
+    for name in WROTE.findall(res.stdout):
+        cand = Path(name)
+        resolved = cand if cand.is_absolute() else (target.parent / name)
+        produced.append(resolved)
     return ToolResult(res.returncode == 0, output, produced)

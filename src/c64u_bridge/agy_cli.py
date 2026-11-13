@@ -36,11 +36,15 @@ INSTALL_CMD_UNIX = f"curl -fsSL {INSTALL_URL_SH} | bash"
 
 DEFAULT_AGY_MODELS: List[Tuple[str, str]] = [
     ("", "Default CLI Model"),
+    ("gemini-4-hydrogen-medium", "Gemini 4 Hydrogen (Medium)"),
+    ("gemini-4-hydrogen-high", "Gemini 4 Hydrogen (High)"),
     ("gemini-4-carbon-medium", "Gemini 4 Carbon (Medium)"),
     ("gemini-4-carbon-high", "Gemini 4 Carbon (High)"),
     ("gemini-4-argon-medium", "Gemini 4 Argon (Medium)"),
     ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
 ]
+
+AGY_EFFORT_LEVELS: Tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
 
 CODE_BLOCK_RE = re.compile(
     r"```([a-zA-Z0-9_+-]*)\s*\n(.*?)```",
@@ -545,8 +549,26 @@ class AgyCliConnector:
             f"C64U_HOST={host}",
             "--env",
             f"C64U_PORT={port}",
+            "--env",
+            f"PYTHONPATH={self.workspace_dir / 'src'}",
         ]
-        if venv_mcp.is_file():
+        venv_py = self.workspace_dir / ".venv" / ("Scripts" if os.name == "nt" else "bin") / (
+            "python.exe" if os.name == "nt" else "python"
+        )
+        if venv_py.is_file():
+            cmd = [
+                str(bin_path),
+                "mcp",
+                "add",
+                *env_flags,
+                "c64u-bridge",
+                "--",
+                str(venv_py),
+                "-m",
+                "c64u_bridge",
+                "mcp",
+            ]
+        elif venv_mcp.is_file():
             cmd = [str(bin_path), "mcp", "add", *env_flags, "c64u-bridge", str(venv_mcp)]
         else:
             py_exe = shutil.which("python") or "python"
@@ -580,12 +602,23 @@ class AgyCliConnector:
         except Exception as exc:
             return False, f"Failed to register MCP server with agy: {exc}"
 
-    def launch_interactive_terminal(self, initial_args: Optional[List[str]] = None) -> Tuple[bool, str]:
+    def launch_interactive_terminal(
+        self,
+        initial_args: Optional[List[str]] = None,
+        model: str = "",
+        effort: str = "",
+    ) -> Tuple[bool, str]:
         """Open `agy` inside a visible OS terminal window rooted in the workspace."""
         bin_path = self.find_binary()
         if not bin_path:
             return False, "Antigravity CLI (agy) is not installed."
-        extra = initial_args or []
+        extra: List[str] = []
+        if model.strip():
+            extra.extend(["--model", model.strip()])
+        if effort.strip():
+            extra.extend(["--effort", effort.strip()])
+        if initial_args:
+            extra.extend(initial_args)
         try:
             if os.name == "nt":
                 subprocess.Popen(
@@ -647,6 +680,7 @@ class AgyCliConnector:
         on_delta: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
         on_file_write: Optional[Callable[[Path, Optional[str]], None]] = None,
+        on_file_edit_start: Optional[Callable[[Path], None]] = None,
     ) -> AgyPromptResult:
         """
         Execute a prompt via `agy --output-format stream-json -p` in the workspace directory,
@@ -795,6 +829,14 @@ class AgyCliConnector:
 
                         if state == "ACTIVE":
                             _emit_status(f"AGY TOOL: {label}")
+                            if t_name in file_write_tools and isinstance(params, dict) and on_file_edit_start is not None:
+                                raw_p = params.get("Path") or params.get("TargetFile")
+                                if isinstance(raw_p, str) and raw_p.strip():
+                                    p_obj = Path(raw_p.strip())
+                                    resolved = (
+                                        p_obj if p_obj.is_absolute() else (self.workspace_dir / p_obj)
+                                    ).resolve()
+                                    on_file_edit_start(resolved)
                         elif state == "DONE":
                             if t_name in file_write_tools and isinstance(params, dict):
                                 raw_p = params.get("Path") or params.get("TargetFile")

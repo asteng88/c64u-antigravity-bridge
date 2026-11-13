@@ -350,6 +350,7 @@ draw_logo_page:
         jsr clear_sky_top
         jsr draw_logo
         PRINT(t_sub, 5, 8, 1)
+        PRINT(t_by, 7, 7, 7)
         rts
 
 // every ten seconds or so the title swaps logo and table

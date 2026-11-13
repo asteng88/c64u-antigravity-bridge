@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -30,7 +31,15 @@ except ImportError:  # pragma: no cover
     ImageFilter = None  # type: ignore
 
 
-ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+def _resolve_assets_dir() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        meipass_assets = Path(getattr(sys, "_MEIPASS")) / "c64u_bridge" / "assets"
+        if meipass_assets.is_dir():
+            return meipass_assets
+    return Path(__file__).resolve().parent / "assets"
+
+
+ASSETS_DIR = _resolve_assets_dir()
 FONTS_DIR = ASSETS_DIR / "fonts"
 
 _FONT_FILES = (
@@ -144,47 +153,5 @@ THEMES: dict[str, dict[str, object]] = {
         "syn_comment": "#8A7BCE",    # Soft Lavender/Blue for comments
         "syn_string": "#B8C76F",     # Yellow for strings
         "syn_hardware": "#FF9E88",   # Light Red/Orange for VIC-II / SID / CIA registers
-    },
-    "C64 Phosphor": {
-        "id": "c64_green",
-        "name": "C64 1702 Phosphor Monitor",
-        "boot_banner": "    **** COMMODORE 64 BASIC V2 ****\n 64K RAM SYSTEM  38911 BASIC BYTES FREE",
-        "ready_prompt": "READY.",
-        "border_idle": "#1F5C2E",
-        "border_active_1": ["#33FF66", "#1F5C2E", "#88FFAA", "#0D2B14"],
-        "border_active_2": ["#29CC52", "#0D2B14", "#66FF99", "#144521"],
-        "paper": "#0A1F0F",
-        "panel_bg": "#061409",
-        "panel_fg": "#33FF66",
-        "editor_bg": "#051108",
-        "editor_fg": "#33FF66",
-        "gutter_bg": "#030B05",
-        "gutter_fg": "#1F8A3B",
-        "ink": "#33FF66",
-        "accent": "#99FFBB",
-        "accent_bright": "#E6FFEE",
-        "highlight": "#33FF66",
-        "cyan": "#66FF99",
-        "success": "#66FF99",
-        "warning": "#CCFF66",
-        "danger": "#FF6655",
-        "button_bg": "#33FF66",
-        "button_fg": "#051108",
-        "button_active_bg": "#E6FFEE",
-        "button_active_fg": "#051108",
-        "input_bg": "#051108",
-        "input_fg": "#E6FFEE",
-        "bar_bg": "#030B05",
-        "bar_fg": "#33FF66",
-        "bar_alt": "#1F8A3B",
-        "rainbow": ["#144521", "#1F5C2E", "#299942", "#33CC55", "#33FF66", "#99FFBB"],
-        "font_family": "Pet Me 64",
-        "syn_opcode": "#E6FFEE",
-        "syn_directive": "#CCFF66",
-        "syn_number": "#66FF99",
-        "syn_label": "#99FFCC",
-        "syn_comment": "#268C42",
-        "syn_string": "#CCFF66",
-        "syn_hardware": "#FFFF88",
     },
 }

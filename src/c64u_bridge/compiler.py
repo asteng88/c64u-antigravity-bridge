@@ -17,7 +17,12 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Union
 
 
-from .env import find_default_kickass_jar, load_env
+from .env import (
+    find_default_java_bin,
+    find_default_kickass_jar,
+    find_default_oscar64_bin,
+    load_env,
+)
 
 # Ensure .env is loaded
 load_env()
@@ -94,11 +99,23 @@ class CrossCompiler:
         oscar64_bin: Optional[str] = None,
     ):
         detected_jar = find_default_kickass_jar()
-        default_jar = str(detected_jar) if detected_jar else "KickAss.jar"
-        self.kickass_jar = kickass_jar or os.getenv("KICKASS_JAR") or default_jar
+        env_jar = os.getenv("KICKASS_JAR")
+        if kickass_jar:
+            self.kickass_jar = kickass_jar
+        elif env_jar and Path(env_jar).is_file():
+            self.kickass_jar = str(Path(env_jar).resolve())
+        elif detected_jar:
+            self.kickass_jar = str(detected_jar)
+        else:
+            self.kickass_jar = env_jar or "KickAss.jar"
         self.acme_bin = acme_bin or os.getenv("ACME_BIN", "acme")
         self.cc65_bin = cc65_bin or os.getenv("CC65_BIN", "cl65")
-        self.oscar64_bin = oscar64_bin or os.getenv("OSCAR64_BIN", "oscar64")
+        self.oscar64_bin = (
+            oscar64_bin
+            or os.getenv("OSCAR64_BIN")
+            or find_default_oscar64_bin()
+            or "oscar64"
+        )
 
     def _is_tool_available(self, tool_bin: str) -> bool:
         """Return True if tool_bin is an existing file path or discoverable on PATH."""
@@ -189,7 +206,7 @@ class CrossCompiler:
 
     def _compile_kickass(self, src: Path, out: Path, flags: List[str]) -> CompilationResult:
         """Invoke KickAssembler via Java runtime."""
-        java_cmd = shutil.which("java") or "java"
+        java_cmd = os.getenv("JAVA_BIN") or find_default_java_bin() or shutil.which("java") or "java"
         cmd = [
             java_cmd,
             "-jar",

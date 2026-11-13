@@ -17,11 +17,12 @@ DEFINITION_KINDS = ("sprites", "tileset", "koala", "song", "levels")
 BUILD_ORDER = {kind: i for i, kind in enumerate(DEFINITION_KINDS)}
 
 KIND_LABELS = {
-    "build": "BUILD MANIFEST",
+    "build": "GAME BUILD SCRIPT (BUILD.PY)",
     "sprites": "SPRITE BANK",
     "tileset": "TILES + MAP",
     "koala": "KOALA SCREEN",
     "song": "SID SONG",
+    "sid": "SID MUSIC SOURCE (MOS 6581/8580 PSID)",
     "levels": "LEVEL TABLES",
     "python": "PYTHON SOURCE (MOS 6502 DIALECT)",
     "c": "C / C++ SOURCE (OSCAR64 / CC65)",
@@ -274,6 +275,8 @@ def classify_file(path: Path) -> str:
         return "c"
     if ext != ".py":
         return ext.lstrip(".")
+    if path.name.lower() == "build.py":
+        return "build"
     try:
         return classify_source(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):

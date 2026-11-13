@@ -11,6 +11,5 @@ STEPS = [
     ("song", "music/heliscape_theme.py"),
     ("song", "music/death/death_march.py"),
     ("levels", "map/heliscape_levels.py"),
-    ("asm", "heliscape.asm"),
-    ("hyperload", "heliscape.prg"),
+    ("asm", "heliscape.asm")
 ]

@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2E2578"/>
+      <stop offset="60%" stop-color="#1E184E"/>
+      <stop offset="100%" stop-color="#120D33"/>
+    </linearGradient>
+    <linearGradient id="bezelGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9A8CEB"/>
+      <stop offset="100%" stop-color="#6556BA"/>
+    </linearGradient>
+    <linearGradient id="crtGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3B2E8C"/>
+      <stop offset="100%" stop-color="#241A5E"/>
+    </linearGradient>
+    <linearGradient id="breadbinTop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E4D7C2"/>
+      <stop offset="100%" stop-color="#C2B299"/>
+    </linearGradient>
+    <linearGradient id="breadbinFront" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#A8987E"/>
+      <stop offset="100%" stop-color="#87775F"/>
+    </linearGradient>
+    <filter id="softShadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#060416" flood-opacity="0.55"/>
+    </filter>
+    <clipPath id="badgeClip">
+      <rect x="20" y="20" width="472" height="472" rx="96" ry="96"/>
+    </clipPath>
+  </defs>
+
+  <!-- Outer Rounded App Badge -->
+  <rect x="20" y="20" width="472" height="472" rx="96" ry="96" fill="url(#bgGrad)" stroke="#887CE2" stroke-width="14"/>
+
+  <!-- Bold C64 5-Color Rainbow Ribbon across top -->
+  <g clip-path="url(#badgeClip)">
+    <rect x="20" y="20" width="472" height="16" fill="#A84C46"/>
+    <rect x="20" y="36" width="472" height="14" fill="#C47E35"/>
+    <rect x="20" y="50" width="472" height="14" fill="#DCD76E"/>
+    <rect x="20" y="64" width="472" height="14" fill="#63AD57"/>
+    <rect x="20" y="78" width="472" height="14" fill="#70C0E6"/>
+  </g>
+
+  <!-- Crisp CRT Frame -->
+  <g filter="url(#softShadow)">
+    <rect x="68" y="108" width="376" height="226" rx="26" ry="26" fill="url(#bezelGrad)"/>
+    <rect x="88" y="128" width="336" height="186" rx="14" ry="14" fill="url(#crtGrad)"/>
+  </g>
+
+  <!-- Bold Iconic "64" + Block Cursor (reads crisply even at 24x24 taskbar size) -->
+  <g font-family="'Arial Black', Impact, Consolas, sans-serif" font-weight="900">
+    <text x="120" y="270" font-size="146" fill="#FFFFFF" letter-spacing="-4">64</text>
+  </g>
+  <!-- Bright Cyan C64 Block Cursor -->
+  <rect x="334" y="170" width="48" height="98" rx="6" fill="#78D4FA"/>
+  <!-- Accent prompt bar -->
+  <rect x="122" y="286" width="194" height="12" rx="4" fill="#DCD76E"/>
+
+  <!-- Stylized Commodore 64 Breadbin Base at Bottom -->
+  <g filter="url(#softShadow)">
+    <path d="M 64 358 L 448 358 L 466 420 L 46 420 Z" fill="url(#breadbinTop)" stroke="#6B5E4B" stroke-width="4" stroke-linejoin="round"/>
+    <rect x="46" y="420" width="420" height="26" rx="8" ry="8" fill="url(#breadbinFront)" stroke="#5E5240" stroke-width="4"/>
+    <!-- Dark Keyboard Well -->
+    <path d="M 86 368 L 368 368 L 378 408 L 76 408 Z" fill="#261E1A"/>
+    <rect x="90" y="375" width="272" height="9" rx="2" fill="#52433A"/>
+    <rect x="84" y="390" width="284" height="9" rx="2" fill="#52433A"/>
+    <!-- Function Keys -->
+    <rect x="388" y="372" width="44" height="11" rx="2" fill="#5E4E42"/>
+    <rect x="392" y="390" width="44" height="11" rx="2" fill="#5E4E42"/>
+    <!-- Red Power LED -->
+    <circle cx="438" cy="364" r="7" fill="#FF4B42" stroke="#7A1E19" stroke-width="2.5"/>
+  </g>
+</svg>

@@ -38,13 +38,13 @@ An authentic **Commodore 64 Lookalike Multi-Language IDE (`C64 Studio`)**, compl
 
 ## 📸 C64 Studio Gallery
 
-| Authentic Boot Sequence (`LOAD "C64-BRIDGE",8,1`) | C / Oscar64 Optimizing Compiler Mode |
+| Station 88 Retro Splash Screen | C / Oscar64 Optimizing Compiler Mode |
 | :---: | :---: |
-| ![Boot Sequence](screenshots/C64_Studio/01_C64_Studio_Boot_Sequence.png) | ![Oscar64 C Mode](screenshots/C64_Studio/03_C64_Studio_Oscar64_C_Mode.png) |
+| ![Splash Screen](screenshots/C64_Studio/01_C64_Studio_Boot_Sequence.png) | ![Oscar64 C Mode](screenshots/C64_Studio/03_C64_Studio_Oscar64_C_Mode.png) |
 | **Full 6502 Assembly IDE (`Ctrl+E`)** | **Antigravity CLI (`agy`) AI Console (`Shift+F12`)** |
 | ![Full 6502 Assembly IDE](screenshots/C64_Studio/04_C64_Studio_Full_6502_Assembly_IDE.png) | ![Antigravity AI Console](screenshots/C64_Studio/05_C64_Studio_Antigravity_AI_Console.png) |
-| **Antigravity CLI Setup & MCP Wizard (`Ctrl+K`)** | **C64 Phosphor Green CRT & DMA Console** |
-| ![Antigravity Setup Wizard](screenshots/C64_Studio/06_C64_Studio_Antigravity_Setup_Wizard.png) | ![C64 Phosphor Theme](screenshots/C64_Studio/07_C64_Studio_Phosphor_Hardware_Console.png) |
+| **Antigravity CLI Setup & MCP Wizard (`Ctrl+K`)** | **C64U Hardware DMA & 6510 CPU Console** |
+| ![Antigravity Setup Wizard](screenshots/C64_Studio/06_C64_Studio_Antigravity_Setup_Wizard.png) | ![C64U Hardware Console](screenshots/C64_Studio/07_C64_Studio_Build_And_Hardware_Console.png) |
 
 ---
 

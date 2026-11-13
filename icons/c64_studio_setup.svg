@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="setupBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#193A5E"/>
+      <stop offset="55%" stop-color="#162652"/>
+      <stop offset="100%" stop-color="#0E1536"/>
+    </linearGradient>
+    <linearGradient id="cartBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#DDD0BA"/>
+      <stop offset="100%" stop-color="#B0A087"/>
+    </linearGradient>
+    <linearGradient id="arrowGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#9BE3FF"/>
+      <stop offset="100%" stop-color="#4FB3E8"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#05081A" flood-opacity="0.55"/>
+    </filter>
+    <clipPath id="setupClip">
+      <rect x="24" y="24" width="464" height="464" rx="96" ry="96"/>
+    </clipPath>
+  </defs>
+
+  <!-- Outer Rounded App Badge -->
+  <rect x="24" y="24" width="464" height="464" rx="96" ry="96" fill="url(#setupBg)" stroke="#6BB6D9" stroke-width="10"/>
+
+  <!-- C64 5-Color Rainbow Accent Bar -->
+  <g clip-path="url(#setupClip)" opacity="0.95">
+    <rect x="24" y="24" width="464" height="14" fill="#9E4842"/>
+    <rect x="24" y="38" width="464" height="12" fill="#B87735"/>
+    <rect x="24" y="50" width="464" height="12" fill="#D4CF6B"/>
+    <rect x="24" y="62" width="464" height="12" fill="#5EA353"/>
+    <rect x="24" y="74" width="464" height="12" fill="#6BB6D9"/>
+  </g>
+
+  <!-- Installer Tray / C64 Cartridge Base -->
+  <g filter="url(#shadow)">
+    <rect x="92" y="294" width="328" height="132" rx="22" ry="22" fill="url(#cartBody)" stroke="#6B5E4B" stroke-width="4"/>
+    <!-- Dark Slot / Drive Bay -->
+    <rect x="122" y="324" width="268" height="46" rx="10" ry="10" fill="#262038"/>
+    <!-- Drive Activity & Power LEDs -->
+    <rect x="142" y="340" width="96" height="14" rx="4" fill="#42366E"/>
+    <circle cx="348" cy="347" r="7" fill="#5CE070"/>
+    <circle cx="372" cy="347" r="7" fill="#F0473E"/>
+    <!-- Label Strip -->
+    <text x="256" y="406" text-anchor="middle" font-family="Consolas, 'Courier New', monospace" font-weight="bold" font-size="24" fill="#2A221D" letter-spacing="2">C64 SETUP</text>
+  </g>
+
+  <!-- Bold Download / Install Arrow -->
+  <g filter="url(#shadow)">
+    <path d="M 218 112 L 294 112 L 294 218 L 352 218 L 256 322 L 160 218 L 218 218 Z"
+          fill="url(#arrowGrad)" stroke="#FFFFFF" stroke-width="8" stroke-linejoin="round"/>
+  </g>
+</svg>
