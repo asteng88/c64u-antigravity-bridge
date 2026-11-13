@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "c64u-bridge"
-version = "0.1.1"
+version = "0.2.0"
 description = "Agent-driven bridge connecting Google Antigravity to the Commodore 64 Ultimate (C64U) for 6502 assembly compilation, DMA execution, and real-time hardware telemetry."
 readme = "README.md"
 requires-python = ">=3.10"

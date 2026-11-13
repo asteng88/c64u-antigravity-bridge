@@ -2,7 +2,7 @@
 """
 C64U Antigravity Bridge - Interactive Setup & Configuration Wizard
 Guides users through configuring the C64 Ultimate bridge, setting up the CLI,
-installing KickAssembler, and connecting to Google Antigravity.
+installing KickAssembler, and connecting to Google Antigravity (`agy`) & Claude Code (`claude`).
 """
 
 from __future__ import annotations
@@ -557,6 +557,85 @@ def test_c64u_connection(host: str, port: int, password: Optional[str] = None) -
     return False
 
 
+def detect_ai_cli_binaries() -> Dict[str, Optional[Path]]:
+    """Detect installed Antigravity (`agy`) and Claude Code (`claude`) CLI binaries."""
+    home = Path.home()
+    is_win = os.name == "nt"
+    local_appdata = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
+    appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
+
+    def _find(cmd_names: Tuple[str, ...], candidates: list[Path]) -> Optional[Path]:
+        for name in cmd_names:
+            hit = shutil.which(name)
+            if hit:
+                return Path(hit).resolve()
+        for cand in candidates:
+            if cand.is_file():
+                return cand.resolve()
+        return None
+
+    agy_cands = (
+        [
+            local_appdata / "agy" / "bin" / "agy.exe",
+            local_appdata / "Programs" / "agy" / "bin" / "agy.exe",
+            local_appdata / "Programs" / "Antigravity" / "bin" / "agy.exe",
+            home / ".agy" / "bin" / "agy.exe",
+            home / ".local" / "bin" / "agy.exe",
+        ]
+        if is_win
+        else [
+            home / ".agy" / "bin" / "agy",
+            home / ".local" / "bin" / "agy",
+            Path("/usr/local/bin/agy"),
+            Path("/opt/homebrew/bin/agy"),
+        ]
+    )
+    claude_cands = (
+        [
+            home / ".local" / "bin" / "claude.exe",
+            home / ".claude" / "local" / "claude.exe",
+            local_appdata / "Claude" / "claude.exe",
+            local_appdata / "Programs" / "claude" / "claude.exe",
+            appdata / "npm" / "claude.cmd",
+        ]
+        if is_win
+        else [
+            home / ".local" / "bin" / "claude",
+            home / ".claude" / "local" / "claude",
+            Path("/usr/local/bin/claude"),
+            Path("/opt/homebrew/bin/claude"),
+            home / ".npm-global" / "bin" / "claude",
+        ]
+    )
+
+    return {
+        "agy": _find(("agy.exe", "agy") if is_win else ("agy",), agy_cands),
+        "claude": _find(("claude.exe", "claude.cmd", "claude") if is_win else ("claude",), claude_cands),
+    }
+
+
+def save_ai_provider_preference(provider: str) -> Path:
+    """Persist the chosen default AI CLI provider ('agy' or 'claude') in studio_settings.json."""
+    override = os.getenv("C64U_STUDIO_SETTINGS")
+    target = (
+        Path(override.strip()).expanduser()
+        if override and override.strip()
+        else Path.home() / ".config" / "c64u-bridge" / "studio_settings.json"
+    )
+    data: Dict[str, Any] = {}
+    if target.is_file():
+        try:
+            loaded = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:
+            data = {}
+    data["ai_provider"] = "claude" if provider == "claude" else "agy"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return target
+
+
 def save_configuration(
     project_root: Path,
     host: str,
@@ -565,8 +644,9 @@ def save_configuration(
     kickass_jar: Optional[Path],
     java_bin: Optional[Path] = None,
     oscar64_bin: Optional[Path] = None,
+    claude_detected: bool = False,
 ):
-    """Write .env file and (when in repo mode) update antigravity/antigravity.json."""
+    """Write .env file and (when in repo mode) update Antigravity & Claude MCP configs."""
     env_file = project_root / ".env"
     lines = [
         "# ====================================================================",
@@ -618,25 +698,53 @@ def save_configuration(
     mcp_config_path.write_text(json.dumps(mcp_data, indent=2) + "\n", encoding="utf-8")
     print(f"  {Style.GREEN}* Updated Antigravity MCP config: {mcp_config_path}{Style.RESET}")
 
-    # Also sync to global ~/.gemini/config/mcp_config.json and ~/.gemini/antigravity-ide/mcp_config.json
+    # Update Claude Code project MCP config (.mcp.json)
+    claude_project_mcp = project_root / ".mcp.json"
+    try:
+        claude_proj_data: Dict[str, Any] = {}
+        if claude_project_mcp.exists() and claude_project_mcp.stat().st_size > 0:
+            try:
+                claude_proj_data = json.loads(claude_project_mcp.read_text(encoding="utf-8"))
+                if not isinstance(claude_proj_data, dict):
+                    claude_proj_data = {}
+            except Exception:
+                claude_proj_data = {}
+        if "mcpServers" not in claude_proj_data or not isinstance(claude_proj_data["mcpServers"], dict):
+            claude_proj_data["mcpServers"] = {}
+        claude_proj_data["mcpServers"]["c64u-bridge"] = mcp_data["mcpServers"]["c64u-bridge"]
+        claude_project_mcp.write_text(json.dumps(claude_proj_data, indent=2) + "\n", encoding="utf-8")
+        print(f"  {Style.GREEN}* Updated Claude Code MCP config: {claude_project_mcp}{Style.RESET}")
+    except Exception:
+        pass
+
+    # Also sync to global ~/.gemini/config/mcp_config.json, ~/.gemini/antigravity-ide/mcp_config.json,
+    # and ~/.claude.json (when present or Claude is detected)
     home = Path.home()
-    for global_mcp_path in [
-        home / ".gemini" / "config" / "mcp_config.json",
-        home / ".gemini" / "antigravity-ide" / "mcp_config.json",
-    ]:
+    global_targets = [
+        ("Antigravity", home / ".gemini" / "config" / "mcp_config.json", False),
+        ("Antigravity", home / ".gemini" / "antigravity-ide" / "mcp_config.json", False),
+        ("Claude Code", home / ".claude.json", claude_detected),
+    ]
+    for label, global_mcp_path, create_if_missing in global_targets:
         try:
-            if global_mcp_path.parent.exists():
+            if global_mcp_path.exists() or (create_if_missing and global_mcp_path.parent.exists()) or (
+                not create_if_missing and global_mcp_path.parent.exists()
+            ):
+                if not global_mcp_path.exists() and not create_if_missing and label == "Claude Code":
+                    continue
                 existing = {}
                 if global_mcp_path.exists() and global_mcp_path.stat().st_size > 0:
                     try:
                         existing = json.loads(global_mcp_path.read_text(encoding="utf-8"))
                     except Exception:
                         existing = {}
-                if "mcpServers" not in existing:
+                if not isinstance(existing, dict):
+                    existing = {}
+                if "mcpServers" not in existing or not isinstance(existing["mcpServers"], dict):
                     existing["mcpServers"] = {}
                 existing["mcpServers"]["c64u-bridge"] = mcp_data["mcpServers"]["c64u-bridge"]
                 global_mcp_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
-                print(f"  {Style.GREEN}* Updated Antigravity environment config: {global_mcp_path}{Style.RESET}")
+                print(f"  {Style.GREEN}* Updated {label} environment config: {global_mcp_path}{Style.RESET}")
         except Exception:
             pass
 
@@ -871,6 +979,11 @@ def main():
     parser.add_argument("--repo", default=C64_STUDIO_GITHUB_REPO, help="GitHub owner/repo for release updates")
     parser.add_argument("--skip-cli", action="store_true", help="Skip CLI and virtualenv setup")
     parser.add_argument("--skip-test", action="store_true", help="Skip C64U connectivity test")
+    parser.add_argument(
+        "--ai-provider",
+        choices=["agy", "claude"],
+        help="Default AI CLI provider for C64 Studio ('agy' or 'claude')",
+    )
     parser.add_argument("-y", "--yes", "--non-interactive", dest="non_interactive", action="store_true",
                         help="Run non-interactively with defaults or provided options")
 
@@ -1026,8 +1139,40 @@ def main():
         if setup_cli:
             setup_cli_and_virtualenv(project_root)
 
-    # --- 8. Save Configuration ---
-    print(f"\n{Style.BOLD}Step 5: Saving Configuration{Style.RESET}")
+    # --- 8. AI CLI Detection & Selection (Antigravity `agy` & Claude Code `claude`) ---
+    print(f"\n{Style.BOLD}Step 5: AI CLI Integration (Antigravity & Claude Code){Style.RESET}")
+    ai_bins = detect_ai_cli_binaries()
+    agy_bin = ai_bins.get("agy")
+    claude_bin = ai_bins.get("claude")
+    print(
+        f"  * Antigravity CLI (agy): "
+        f"{Style.GREEN + str(agy_bin) + Style.RESET if agy_bin else Style.YELLOW + 'Not detected' + Style.RESET}"
+    )
+    print(
+        f"  * Claude Code CLI (claude): "
+        f"{Style.GREEN + str(claude_bin) + Style.RESET if claude_bin else Style.YELLOW + 'Not detected' + Style.RESET}"
+    )
+
+    default_provider = args.ai_provider or (
+        "claude" if (claude_bin and not agy_bin) else "agy"
+    )
+    chosen_provider = default_provider
+    if args.ai_provider:
+        chosen_provider = args.ai_provider
+    elif interactive:
+        choice_raw = prompt_user(
+            "Preferred AI CLI for C64 Studio ('agy' for Antigravity or 'claude' for Claude Code)",
+            default=default_provider,
+        ).strip().lower()
+        chosen_provider = "claude" if choice_raw in ("claude", "claude-code", "claude_code") else "agy"
+
+    studio_settings_path = save_ai_provider_preference(chosen_provider)
+    print(
+        f"  {Style.GREEN}* Saved default C64 Studio AI CLI ({chosen_provider}): {studio_settings_path}{Style.RESET}"
+    )
+
+    # --- 9. Save Configuration ---
+    print(f"\n{Style.BOLD}Step 6: Saving Configuration{Style.RESET}")
     save_configuration(
         project_root=project_root,
         host=host,
@@ -1036,9 +1181,10 @@ def main():
         kickass_jar=kickass_jar,
         java_bin=java_bin,
         oscar64_bin=oscar64_bin,
+        claude_detected=bool(claude_bin),
     )
 
-    # --- 9. Test C64U Connection ---
+    # --- 10. Test C64U Connection ---
     if not args.skip_test:
         do_test = True
         if interactive:
@@ -1061,6 +1207,7 @@ def main():
   * KickAssembler: {Style.CYAN}{kickass_jar or 'Not installed'}{Style.RESET}
   * Java Runtime:  {Style.CYAN}{java_bin or 'Not installed'}{Style.RESET}
   * Oscar64:       {Style.CYAN}{oscar64_bin or 'Not installed'}{Style.RESET}
+  * Active AI CLI: {Style.CYAN}{chosen_provider}{Style.RESET} (switch anytime in C64 Studio)
 
 {Style.BOLD}Next Step:{Style.RESET}
   Launch {Style.CYAN}C64-Studio.exe{Style.RESET} in {Style.CYAN}{project_root}{Style.RESET}!
@@ -1086,9 +1233,10 @@ def main():
   * Compile & DMA Run 6502 Assembly:
       {Style.CYAN}.\\c64u-bridge run examples/hello_world.asm{Style.RESET}
 
-{Style.BOLD}Google Antigravity Integration:{Style.RESET}
-  * Configuration generated in: {Style.CYAN}antigravity/antigravity.json{Style.RESET}
-  * C64 Hardware Rules installed in: {Style.CYAN}.agents/rules/c64-bridge.md{Style.RESET}
+{Style.BOLD}AI CLI Integration (Active: {chosen_provider}):{Style.RESET}
+  * Antigravity MCP Config: {Style.CYAN}antigravity/antigravity.json{Style.RESET}
+  * Claude Code MCP Config: {Style.CYAN}.mcp.json{Style.RESET}
+  * C64 Hardware Rules:     {Style.CYAN}.agents/rules/c64-bridge.md{Style.RESET}
   * Launch MCP Server:
       {Style.CYAN}.\\c64u-bridge mcp{Style.RESET}
 """)

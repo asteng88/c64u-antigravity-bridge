@@ -1,11 +1,12 @@
 """
-Antigravity CLI (`agy`) Auto-Detection, Setup Walkthrough & Prompt Orchestrator
+AI CLI (`agy` & `claude`) Auto-Detection, Setup Walkthrough & Prompt Orchestrator
 for C64 Studio IDE.
 
 Supports:
-- Automatic discovery of `agy` / `agy.exe` across PATH and standard OS install roots.
-- Guided & automated installation via official `https://antigravity.google/cli/` scripts.
-- One-click `c64u-bridge` MCP server registration with `agy mcp add`.
+- Automatic discovery of Antigravity CLI (`agy`) and Claude Code CLI (`claude`)
+  across PATH and standard OS install roots.
+- Guided & automated installation via official install scripts.
+- One-click `c64u-bridge` MCP server registration with `agy mcp add` or `claude mcp add`.
 - Multi-language C64 prompt orchestration (6502 KickAssembler, C/Oscar64/CC65, Python-to-6502)
   with live line streaming, multi-turn `--continue`, and fenced code block extraction.
 """
@@ -21,7 +22,7 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 INSTALL_URL_PS1 = "https://antigravity.google/cli/install.ps1"
@@ -34,6 +35,21 @@ INSTALL_CMD_WINDOWS_CMD = (
 )
 INSTALL_CMD_UNIX = f"curl -fsSL {INSTALL_URL_SH} | bash"
 
+CLAUDE_INSTALL_URL_PS1 = "https://claude.ai/install.ps1"
+CLAUDE_INSTALL_URL_CMD = "https://claude.ai/install.cmd"
+CLAUDE_INSTALL_URL_SH = "https://claude.ai/install.sh"
+
+CLAUDE_INSTALL_CMD_WINDOWS_PS1 = f"irm {CLAUDE_INSTALL_URL_PS1} | iex"
+CLAUDE_INSTALL_CMD_WINDOWS_CMD = (
+    f"curl -fsSL {CLAUDE_INSTALL_URL_CMD} -o install.cmd && install.cmd && del install.cmd"
+)
+CLAUDE_INSTALL_CMD_UNIX = f"curl -fsSL {CLAUDE_INSTALL_URL_SH} | bash"
+
+AI_PROVIDERS: Tuple[Tuple[str, str], ...] = (
+    ("agy", "Antigravity (agy)"),
+    ("claude", "Claude Code (claude)"),
+)
+
 DEFAULT_AGY_MODELS: List[Tuple[str, str]] = [
     ("", "Default CLI Model"),
     ("gemini-4-hydrogen-medium", "Gemini 4 Hydrogen (Medium)"),
@@ -44,7 +60,54 @@ DEFAULT_AGY_MODELS: List[Tuple[str, str]] = [
     ("gemini-3.8-flash-high", "Gemini 3.8 Flash (High)"),
 ]
 
+DEFAULT_CLAUDE_MODELS: List[Tuple[str, str]] = [
+    ("", "Default CLI Model"),
+    ("sonnet", "Claude Sonnet (Latest)"),
+    ("opus", "Claude Opus (Latest)"),
+    ("haiku", "Claude Haiku (Latest)"),
+]
+
 AGY_EFFORT_LEVELS: Tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+
+
+def normalize_provider(provider: Optional[str]) -> str:
+    """Normalize an AI CLI provider identifier to 'agy' or 'claude'."""
+    val = (provider or "").strip().lower()
+    if val in ("claude", "claude-code", "claude_code", "claude.exe"):
+        return "claude"
+    return "agy"
+
+
+def provider_display_name(provider: str) -> str:
+    """Human-readable display name for an AI CLI provider."""
+    return "Claude Code CLI" if normalize_provider(provider) == "claude" else "Antigravity CLI"
+
+
+def provider_short_tag(provider: str) -> str:
+    """Short uppercase badge/log tag for an AI CLI provider."""
+    return "CLAUDE" if normalize_provider(provider) == "claude" else "AGY"
+
+
+def default_models_for_provider(provider: str) -> List[Tuple[str, str]]:
+    """Return default model choices for the specified AI CLI provider."""
+    if normalize_provider(provider) == "claude":
+        return list(DEFAULT_CLAUDE_MODELS)
+    return list(DEFAULT_AGY_MODELS)
+
+
+def install_commands_for_provider(provider: str) -> Tuple[str, str]:
+    """Return (primary_install_cmd, alt_install_cmd) for the current OS and provider."""
+    is_win = os.name == "nt"
+    if normalize_provider(provider) == "claude":
+        return (
+            CLAUDE_INSTALL_CMD_WINDOWS_PS1 if is_win else CLAUDE_INSTALL_CMD_UNIX,
+            CLAUDE_INSTALL_CMD_WINDOWS_CMD if is_win else "",
+        )
+    return (
+        INSTALL_CMD_WINDOWS_PS1 if is_win else INSTALL_CMD_UNIX,
+        INSTALL_CMD_WINDOWS_CMD if is_win else "",
+    )
+
 
 CODE_BLOCK_RE = re.compile(
     r"```([a-zA-Z0-9_+-]*)\s*\n(.*?)```",
@@ -54,7 +117,7 @@ CODE_BLOCK_RE = re.compile(
 
 @dataclass
 class ExtractedCodeBlock:
-    """A fenced code block extracted from an Antigravity CLI response."""
+    """A fenced code block extracted from an AI CLI response."""
 
     language_tag: str
     studio_mode: str  # "asm", "c", or "py"
@@ -63,7 +126,7 @@ class ExtractedCodeBlock:
 
 @dataclass
 class AgyStatus:
-    """Snapshot of local Antigravity CLI (`agy`) installation and configuration state."""
+    """Snapshot of local AI CLI (`agy` or `claude`) installation and configuration state."""
 
     installed: bool
     binary_path: Optional[Path] = None
@@ -75,6 +138,7 @@ class AgyStatus:
     install_command_alt: str = ""
     status_message: str = ""
     error: Optional[str] = None
+    provider: str = "agy"
 
 
 @dataclass
@@ -327,18 +391,53 @@ def build_c64_prompt(
 
 
 class AgyCliConnector:
-    """Manages Antigravity CLI (`agy`) discovery, setup, MCP linking, and prompt execution."""
+    """Manages AI CLI (`agy` & `claude`) discovery, setup, MCP linking, and prompt execution."""
 
-    def __init__(self, agy_bin: Optional[str] = None, workspace_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        agy_bin: Optional[str] = None,
+        workspace_dir: Optional[Path] = None,
+        claude_bin: Optional[str] = None,
+        provider: str = "agy",
+    ):
         self._explicit_bin = agy_bin or os.getenv("AGY_BIN")
+        self._explicit_claude_bin = claude_bin or os.getenv("CLAUDE_BIN")
+        self.provider = normalize_provider(provider)
         self.workspace_dir = (workspace_dir or Path.cwd()).resolve()
         self.last_status: Optional[AgyStatus] = None
+        self.last_statuses: Dict[str, AgyStatus] = {}
 
     @staticmethod
-    def candidate_binary_paths() -> List[Path]:
-        """Return ordered platform-specific candidate paths where `agy` is installed."""
+    def candidate_binary_paths(provider: str = "agy") -> List[Path]:
+        """Return ordered platform-specific candidate paths where the CLI binary is installed."""
+        prov = normalize_provider(provider)
         candidates: List[Path] = []
         home = Path.home()
+        if prov == "claude":
+            if os.name == "nt":
+                local_appdata = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
+                appdata = Path(os.environ.get("APPDATA", str(home / "AppData" / "Roaming")))
+                candidates.extend(
+                    [
+                        home / ".local" / "bin" / "claude.exe",
+                        home / ".claude" / "local" / "claude.exe",
+                        local_appdata / "Claude" / "claude.exe",
+                        local_appdata / "Programs" / "claude" / "claude.exe",
+                        appdata / "npm" / "claude.cmd",
+                    ]
+                )
+            else:
+                candidates.extend(
+                    [
+                        home / ".local" / "bin" / "claude",
+                        home / ".claude" / "local" / "claude",
+                        Path("/usr/local/bin/claude"),
+                        Path("/opt/homebrew/bin/claude"),
+                        home / ".npm-global" / "bin" / "claude",
+                    ]
+                )
+            return candidates
+
         if os.name == "nt":
             local_appdata = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local")))
             candidates.extend(
@@ -370,36 +469,56 @@ class AgyCliConnector:
             )
         return candidates
 
-    def find_binary(self) -> Optional[Path]:
-        """Auto-detect the `agy` CLI executable."""
-        if self._explicit_bin:
-            exp = Path(self._explicit_bin)
+    def find_binary(self, provider: Optional[str] = None) -> Optional[Path]:
+        """Auto-detect the CLI executable for `provider` ('agy' or 'claude')."""
+        prov = normalize_provider(provider or self.provider)
+        explicit = self._explicit_claude_bin if prov == "claude" else self._explicit_bin
+        if explicit:
+            exp = Path(explicit)
             if exp.is_file():
                 return exp.resolve()
-            found_exp = shutil.which(self._explicit_bin)
+            found_exp = shutil.which(explicit)
             if found_exp:
                 return Path(found_exp).resolve()
 
-        for cmd_name in ("agy.exe", "agy") if os.name == "nt" else ("agy",):
+        if prov == "claude":
+            cmd_names = ("claude.exe", "claude.cmd", "claude") if os.name == "nt" else ("claude",)
+        else:
+            cmd_names = ("agy.exe", "agy") if os.name == "nt" else ("agy",)
+
+        for cmd_name in cmd_names:
             which_hit = shutil.which(cmd_name)
             if which_hit:
                 return Path(which_hit).resolve()
 
-        for cand in self.candidate_binary_paths():
+        cands = (
+            self.candidate_binary_paths()
+            if prov == "agy"
+            else self.candidate_binary_paths("claude")
+        )
+        for cand in cands:
             if cand.is_file():
                 return cand.resolve()
 
         return None
 
-    def detect_cli(self, fetch_models: bool = False) -> AgyStatus:
-        """Inspect `agy` installation, version, settings, and C64U MCP registration."""
-        is_win = os.name == "nt"
-        install_cmd = INSTALL_CMD_WINDOWS_PS1 if is_win else INSTALL_CMD_UNIX
-        install_alt = INSTALL_CMD_WINDOWS_CMD if is_win else ""
+    def detect_cli(
+        self,
+        fetch_models: bool = False,
+        provider: Optional[str] = None,
+    ) -> AgyStatus:
+        """Inspect CLI installation, version, settings, and C64U MCP registration."""
+        prov = normalize_provider(provider or self.provider)
+        disp_name = provider_display_name(prov)
+        install_cmd, install_alt = install_commands_for_provider(prov)
 
-        bin_path = self.find_binary()
-        settings_file = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
-        global_mcp_file = Path.home() / ".gemini" / "config" / "mcp_config.json"
+        bin_path = self.find_binary(provider=prov)
+        if prov == "claude":
+            settings_file = Path.home() / ".claude" / "settings.json"
+            global_mcp_file = Path.home() / ".claude.json"
+        else:
+            settings_file = Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
+            global_mcp_file = Path.home() / ".gemini" / "config" / "mcp_config.json"
 
         mcp_linked = False
         if global_mcp_file.is_file():
@@ -409,6 +528,7 @@ class AgyCliConnector:
             except Exception:
                 pass
 
+        default_models = default_models_for_provider(prov)
         if bin_path is None:
             status = AgyStatus(
                 installed=False,
@@ -416,11 +536,15 @@ class AgyCliConnector:
                 version=None,
                 mcp_configured=mcp_linked,
                 settings_exists=settings_file.is_file(),
+                models=default_models,
                 install_command=install_cmd,
                 install_command_alt=install_alt,
-                status_message="Antigravity CLI (agy) not detected on this system.",
+                status_message=f"{disp_name} ({prov}) not detected on this system.",
+                provider=prov,
             )
-            self.last_status = status
+            self.last_statuses[prov] = status
+            if prov == self.provider:
+                self.last_status = status
             return status
 
         version_str: Optional[str] = None
@@ -454,8 +578,8 @@ class AgyCliConnector:
             except Exception:
                 pass
 
-        models = list(DEFAULT_AGY_MODELS)
-        if fetch_models:
+        models = list(default_models)
+        if fetch_models and prov == "agy":
             try:
                 mod_res = subprocess.run(
                     [str(bin_path), "models"],
@@ -485,23 +609,39 @@ class AgyCliConnector:
             models=models,
             install_command=install_cmd,
             install_command_alt=install_alt,
-            status_message=f"Antigravity CLI {ver_disp} detected at {bin_path}",
+            status_message=f"{disp_name} {ver_disp} detected at {bin_path}",
             error=err_str,
+            provider=prov,
         )
-        self.last_status = status
+        self.last_statuses[prov] = status
+        if prov == self.provider:
+            self.last_status = status
         return status
+
+    def detect_all_clis(self, fetch_models: bool = False) -> Dict[str, AgyStatus]:
+        """Detect both Antigravity (`agy`) and Claude Code (`claude`) CLIs."""
+        return {
+            prov_id: self.detect_cli(fetch_models=fetch_models, provider=prov_id)
+            for prov_id, _ in AI_PROVIDERS
+        }
 
     def install_cli(
         self,
         progress_callback: Optional[Callable[[str], None]] = None,
+        provider: Optional[str] = None,
     ) -> Tuple[bool, str]:
-        """Download and install the official Google Antigravity CLI (`agy`)."""
+        """Download and install the official CLI (`agy` or `claude`)."""
+        prov = normalize_provider(provider or self.provider)
+        disp_name = provider_display_name(prov)
+        install_ps1, _ = install_commands_for_provider(prov)
+        install_unix = CLAUDE_INSTALL_CMD_UNIX if prov == "claude" else INSTALL_CMD_UNIX
+
         def _emit(msg: str) -> None:
             if progress_callback:
                 progress_callback(msg)
 
         if os.name == "nt":
-            _emit(f"Running official Windows installer: {INSTALL_CMD_WINDOWS_PS1}")
+            _emit(f"Running official Windows installer: {install_ps1}")
             ps_exe = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
             cmd = [
                 ps_exe,
@@ -509,12 +649,12 @@ class AgyCliConnector:
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                INSTALL_CMD_WINDOWS_PS1,
+                install_ps1,
             ]
         else:
-            _emit(f"Running official Unix installer: {INSTALL_CMD_UNIX}")
+            _emit(f"Running official Unix installer: {install_unix}")
             bash_exe = shutil.which("bash") or "/bin/bash"
-            cmd = [bash_exe, "-c", INSTALL_CMD_UNIX]
+            cmd = [bash_exe, "-c", install_unix]
 
         try:
             res = subprocess.run(
@@ -527,30 +667,32 @@ class AgyCliConnector:
             if res.stdout:
                 for ln in res.stdout.strip().splitlines()[-6:]:
                     _emit(ln)
-            st = self.detect_cli()
+            st = self.detect_cli(provider=prov)
             if st.installed and st.binary_path:
-                # Ensure `agy install` configures user PATH hooks if needed
-                try:
-                    subprocess.run(
-                        [str(st.binary_path), "install"],
-                        capture_output=True,
-                        text=True,
-                        timeout=15.0,
-                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                    )
-                except Exception:
-                    pass
-                return True, f"Installed Antigravity CLI v{st.version or ''} at {st.binary_path}"
+                if prov == "agy":
+                    try:
+                        subprocess.run(
+                            [str(st.binary_path), "install"],
+                            capture_output=True,
+                            text=True,
+                            timeout=15.0,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                        )
+                    except Exception:
+                        pass
+                return True, f"Installed {disp_name} v{st.version or ''} at {st.binary_path}"
             err_detail = (res.stderr or res.stdout or f"exit code {res.returncode}").strip()
-            return False, f"Installer finished without detecting agy binary: {err_detail}"
+            return False, f"Installer finished without detecting {prov} binary: {err_detail}"
         except Exception as exc:
-            return False, f"Automatic Antigravity CLI installation failed: {exc}"
+            return False, f"Automatic {disp_name} installation failed: {exc}"
 
-    def update_cli(self) -> Tuple[bool, str]:
-        """Update an existing `agy` installation via `agy update`."""
-        bin_path = self.find_binary()
+    def update_cli(self, provider: Optional[str] = None) -> Tuple[bool, str]:
+        """Update an existing `agy` or `claude` installation."""
+        prov = normalize_provider(provider or self.provider)
+        disp_name = provider_display_name(prov)
+        bin_path = self.find_binary(provider=prov)
         if not bin_path:
-            return False, "Antigravity CLI (agy) is not installed yet."
+            return False, f"{disp_name} ({prov}) is not installed yet."
         try:
             res = subprocess.run(
                 [str(bin_path), "update"],
@@ -559,44 +701,58 @@ class AgyCliConnector:
                 timeout=120.0,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
-            st = self.detect_cli()
+            st = self.detect_cli(provider=prov)
             out = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
             if res.returncode == 0:
-                return True, out or f"Antigravity CLI updated (v{st.version})."
+                return True, out or f"{disp_name} updated (v{st.version})."
             return False, out or f"Update exited with code {res.returncode}"
         except Exception as exc:
-            return False, f"Failed to run `agy update`: {exc}"
+            return False, f"Failed to run `{prov} update`: {exc}"
 
-    def register_c64u_mcp(self, host: str = "c64u.local", port: int = 80) -> Tuple[bool, str]:
-        """Register the `c64u-bridge` MCP server with the Antigravity CLI."""
-        bin_path = self.find_binary()
+    def register_c64u_mcp(
+        self,
+        host: str = "c64u.local",
+        port: int = 80,
+        provider: Optional[str] = None,
+    ) -> Tuple[bool, str]:
+        """Register the `c64u-bridge` MCP server with the selected CLI (`agy` or `claude`)."""
+        prov = normalize_provider(provider or self.provider)
+        disp_name = provider_display_name(prov)
+        bin_path = self.find_binary(provider=prov)
         if not bin_path:
-            return False, "Install Antigravity CLI (agy) first before linking MCP."
+            return False, f"Install {disp_name} ({prov}) first before linking MCP."
 
-        # Prefer virtualenv c64u-mcp executable if present, otherwise `python -m c64u_bridge mcp`
         venv_mcp = self.workspace_dir / ".venv" / ("Scripts" if os.name == "nt" else "bin") / (
             "c64u-mcp.exe" if os.name == "nt" else "c64u-mcp"
         )
         # Remove any stale entry quietly first so `add` cleanly updates
-        try:
-            subprocess.run(
-                [str(bin_path), "mcp", "remove", "c64u-bridge"],
-                capture_output=True,
-                text=True,
-                timeout=8.0,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-        except Exception:
-            pass
+        rm_cmds = (
+            [[str(bin_path), "mcp", "remove", "-s", "user", "c64u-bridge"], [str(bin_path), "mcp", "remove", "c64u-bridge"]]
+            if prov == "claude"
+            else [[str(bin_path), "mcp", "remove", "c64u-bridge"]]
+        )
+        for rm_cmd in rm_cmds:
+            try:
+                subprocess.run(
+                    rm_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=8.0,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+            except Exception:
+                pass
 
+        env_flag = "-e" if prov == "claude" else "--env"
         env_flags = [
-            "--env",
+            env_flag,
             f"C64U_HOST={host}",
-            "--env",
+            env_flag,
             f"C64U_PORT={port}",
-            "--env",
+            env_flag,
             f"PYTHONPATH={self.workspace_dir / 'src'}",
         ]
+        scope_flags = ["-s", "user"] if prov == "claude" else []
         venv_py = self.workspace_dir / ".venv" / ("Scripts" if os.name == "nt" else "bin") / (
             "python.exe" if os.name == "nt" else "python"
         )
@@ -605,6 +761,7 @@ class AgyCliConnector:
                 str(bin_path),
                 "mcp",
                 "add",
+                *scope_flags,
                 *env_flags,
                 "c64u-bridge",
                 "--",
@@ -614,13 +771,14 @@ class AgyCliConnector:
                 "mcp",
             ]
         elif venv_mcp.is_file():
-            cmd = [str(bin_path), "mcp", "add", *env_flags, "c64u-bridge", str(venv_mcp)]
+            cmd = [str(bin_path), "mcp", "add", *scope_flags, *env_flags, "c64u-bridge", "--", str(venv_mcp)]
         else:
             py_exe = shutil.which("python") or "python"
             cmd = [
                 str(bin_path),
                 "mcp",
                 "add",
+                *scope_flags,
                 *env_flags,
                 "c64u-bridge",
                 "--",
@@ -640,23 +798,26 @@ class AgyCliConnector:
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
             out = ((res.stdout or "") + "\n" + (res.stderr or "")).strip()
-            self.detect_cli()
+            self.detect_cli(provider=prov)
             if res.returncode == 0:
-                return True, out or "Linked `c64u-bridge` MCP server to Antigravity CLI."
-            return False, out or f"`agy mcp add` exited with code {res.returncode}"
+                return True, out or f"Linked `c64u-bridge` MCP server to {disp_name}."
+            return False, out or f"`{prov} mcp add` exited with code {res.returncode}"
         except Exception as exc:
-            return False, f"Failed to register MCP server with agy: {exc}"
+            return False, f"Failed to register MCP server with {prov}: {exc}"
 
     def launch_interactive_terminal(
         self,
         initial_args: Optional[List[str]] = None,
         model: str = "",
         effort: str = "",
+        provider: Optional[str] = None,
     ) -> Tuple[bool, str]:
-        """Open `agy` inside a visible OS terminal window rooted in the workspace."""
-        bin_path = self.find_binary()
+        """Open `agy` or `claude` inside a visible OS terminal window rooted in the workspace."""
+        prov = normalize_provider(provider or self.provider)
+        disp_name = provider_display_name(prov)
+        bin_path = self.find_binary(provider=prov)
         if not bin_path:
-            return False, "Antigravity CLI (agy) is not installed."
+            return False, f"{disp_name} ({prov}) is not installed."
         extra: List[str] = []
         if model.strip():
             extra.extend(["--model", model.strip()])
@@ -671,7 +832,7 @@ class AgyCliConnector:
                         "cmd.exe",
                         "/c",
                         "start",
-                        "Antigravity CLI (agy) — C64 Studio Live Sync",
+                        f"{disp_name} ({prov}) — C64 Studio Live Sync",
                         "cmd.exe",
                         "/k",
                         str(bin_path),
@@ -691,18 +852,18 @@ class AgyCliConnector:
                         break
                 else:
                     return False, f"Run `{bin_path}` in your terminal to complete authentication."
-            return True, f"Launched interactive Antigravity CLI terminal ({bin_path.name})."
+            return True, f"Launched interactive {disp_name} terminal ({bin_path.name})."
         except Exception as exc:
             return False, f"Could not open terminal window: {exc}"
 
     @staticmethod
     def _summarize_tool_target(params: dict) -> str:
         """Format a short target hint for live CLI tool status display."""
-        for key in ("Path", "TargetFile", "source_path", "prg_path", "sid_path", "output_path"):
+        for key in ("Path", "TargetFile", "file_path", "path", "source_path", "prg_path", "sid_path", "output_path"):
             val = params.get(key)
             if isinstance(val, str) and val.strip():
                 return Path(val.strip()).name
-        for key in ("CommandLine", "query", "action"):
+        for key in ("CommandLine", "command", "query", "action"):
             val = params.get(key)
             if isinstance(val, str) and val.strip():
                 clean = " ".join(val.strip().split())
@@ -721,6 +882,7 @@ class AgyCliConnector:
         exec_mode: str = "accept-edits",
         model: str = "",
         effort: str = "",
+        provider: Optional[str] = None,
         on_line: Optional[Callable[[str], None]] = None,
         on_delta: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
@@ -728,11 +890,16 @@ class AgyCliConnector:
         on_file_edit_start: Optional[Callable[[Path], None]] = None,
     ) -> AgyPromptResult:
         """
-        Execute a prompt via `agy --output-format stream-json -p` in the workspace directory,
+        Execute a prompt via `agy` or `claude` (`--output-format stream-json -p`) in the workspace,
         streaming live tokens (`on_delta`), lines (`on_line`), tool/thinking status (`on_status`),
         and direct file writes (`on_file_write`) in real time.
         """
-        bin_path = self.find_binary()
+        prov = normalize_provider(provider or self.provider)
+        disp_name = provider_display_name(prov)
+        tag = provider_short_tag(prov)
+        install_cmd, _ = install_commands_for_provider(prov)
+
+        bin_path = self.find_binary(provider=prov)
         if not bin_path:
             return AgyPromptResult(
                 success=False,
@@ -741,8 +908,8 @@ class AgyCliConnector:
                 return_code=-1,
                 command=[],
                 error_message=(
-                    "Antigravity CLI (`agy`) is not installed. Click 'AGY SETUP' to auto-install "
-                    f"or run: {INSTALL_CMD_WINDOWS_PS1 if os.name == 'nt' else INSTALL_CMD_UNIX}"
+                    f"{disp_name} (`{prov}`) is not installed. Click 'CLI SETUP' to auto-install "
+                    f"or run: {install_cmd}"
                 ),
             )
 
@@ -755,15 +922,31 @@ class AgyCliConnector:
         )
 
         cmd: List[str] = [str(bin_path)]
-        if exec_mode in {"accept-edits", "plan", "auto"}:
-            cmd.extend(["--mode", exec_mode])
-        if continue_conversation:
-            cmd.append("--continue")
-        if model.strip():
-            cmd.extend(["--model", model.strip()])
-        if effort.strip():
-            cmd.extend(["--effort", effort.strip()])
-        cmd.extend(["--output-format", "stream-json", "-p", full_prompt])
+        if prov == "claude":
+            claude_mode_map = {
+                "accept-edits": "acceptEdits",
+                "plan": "plan",
+                "auto": "auto",
+            }
+            if exec_mode in claude_mode_map:
+                cmd.extend(["--permission-mode", claude_mode_map[exec_mode]])
+            if continue_conversation:
+                cmd.append("--continue")
+            if model.strip():
+                cmd.extend(["--model", model.strip()])
+            if effort.strip():
+                cmd.extend(["--effort", effort.strip()])
+            cmd.extend(["--output-format", "stream-json", "--verbose", "--include-partial-messages", "-p", full_prompt])
+        else:
+            if exec_mode in {"accept-edits", "plan", "auto"}:
+                cmd.extend(["--mode", exec_mode])
+            if continue_conversation:
+                cmd.append("--continue")
+            if model.strip():
+                cmd.extend(["--model", model.strip()])
+            if effort.strip():
+                cmd.extend(["--effort", effort.strip()])
+            cmd.extend(["--output-format", "stream-json", "-p", full_prompt])
 
         text_chunks: List[str] = []
         line_buffer = ""
@@ -771,12 +954,18 @@ class AgyCliConnector:
         touched_files: List[Path] = []
         conv_id: Optional[str] = None
         result_error: Optional[str] = None
+        saw_stream_deltas = False
         file_write_tools = {
             "write_file",
             "edit_file",
             "create_file",
             "replace_file_content",
             "multi_replace_file_content",
+            "Write",
+            "Edit",
+            "MultiEdit",
+            "write",
+            "edit",
         }
 
         def _emit_delta(delta: str) -> None:
@@ -833,7 +1022,7 @@ class AgyCliConnector:
                 if stripped_ln.startswith("{"):
                     try:
                         cand = json.loads(stripped_ln)
-                        if isinstance(cand, dict) and "event" in cand:
+                        if isinstance(cand, dict) and ("event" in cand or "type" in cand):
                             parsed_evt = cand
                     except Exception:
                         parsed_evt = None
@@ -843,81 +1032,175 @@ class AgyCliConnector:
                     _emit_delta(clean_line + "\n")
                     continue
 
-                evt_type = parsed_evt.get("event")
-                if evt_type == "init":
-                    conv_id = parsed_evt.get("conversation_id") or conv_id
-                    short_id = conv_id[:8] if isinstance(conv_id, str) and conv_id else "ready"
-                    _emit_status(f"AGY CONNECTED ({short_id}) — READING C64 CONTEXT...")
+                def _resolve_tool_path(params: dict) -> Optional[Path]:
+                    raw_p = (
+                        params.get("Path")
+                        or params.get("TargetFile")
+                        or params.get("file_path")
+                        or params.get("path")
+                    )
+                    if isinstance(raw_p, str) and raw_p.strip():
+                        p_obj = Path(raw_p.strip())
+                        return (
+                            p_obj if p_obj.is_absolute() else (self.workspace_dir / p_obj)
+                        ).resolve()
+                    return None
 
-                elif evt_type == "step_update":
-                    su = parsed_evt.get("step_update") or {}
-                    step_type = su.get("step_type", "")
-                    state = su.get("state", "")
+                def _record_file_write(resolved: Path, fallback_content: Optional[str] = None) -> None:
+                    if resolved not in touched_files:
+                        touched_files.append(resolved)
+                    disk_txt: Optional[str] = None
+                    if resolved.is_file():
+                        try:
+                            disk_txt = resolved.read_text(encoding="utf-8")
+                        except Exception:
+                            disk_txt = fallback_content
+                    elif isinstance(fallback_content, str):
+                        disk_txt = fallback_content
+                    if on_file_write is not None:
+                        on_file_write(resolved, disk_txt)
 
-                    if step_type == "user_input" and state == "DONE":
-                        _emit_status("AGY THINKING...")
-                    elif su.get("thinking_delta"):
-                        _emit_status("AGY REASONING...")
-                    elif step_type == "agent_response":
-                        td = su.get("text_delta") or ""
-                        if td:
-                            _emit_delta(td)
-                            _emit_status("AGY STREAMING CODE...")
-                        elif state == "DONE":
-                            _emit_status("AGY PREPARING NEXT STEP...")
-                    elif step_type == "tool":
-                        t_info = su.get("tool_info") or {}
-                        t_name = su.get("tool_name") or t_info.get("name") or "tool"
-                        params = t_info.get("parameters") or {}
-                        target_hint = self._summarize_tool_target(params) if isinstance(params, dict) else ""
-                        label = f"{t_name} ({target_hint})" if target_hint else t_name
+                if isinstance(parsed_evt.get("event"), str):
+                    evt_type = parsed_evt.get("event")
+                    if evt_type == "init":
+                        conv_id = parsed_evt.get("conversation_id") or conv_id
+                        short_id = conv_id[:8] if isinstance(conv_id, str) and conv_id else "ready"
+                        _emit_status(f"{tag} CONNECTED ({short_id}) — READING C64 CONTEXT...")
 
-                        if state == "ACTIVE":
-                            _emit_status(f"AGY TOOL: {label}")
-                            if t_name in file_write_tools and isinstance(params, dict) and on_file_edit_start is not None:
-                                raw_p = params.get("Path") or params.get("TargetFile")
-                                if isinstance(raw_p, str) and raw_p.strip():
-                                    p_obj = Path(raw_p.strip())
-                                    resolved = (
-                                        p_obj if p_obj.is_absolute() else (self.workspace_dir / p_obj)
-                                    ).resolve()
-                                    on_file_edit_start(resolved)
-                        elif state == "DONE":
-                            if t_name in file_write_tools and isinstance(params, dict):
-                                raw_p = params.get("Path") or params.get("TargetFile")
-                                if isinstance(raw_p, str) and raw_p.strip():
-                                    p_obj = Path(raw_p.strip())
-                                    resolved = (
-                                        p_obj if p_obj.is_absolute() else (self.workspace_dir / p_obj)
-                                    ).resolve()
-                                    if resolved not in touched_files:
-                                        touched_files.append(resolved)
-                                    disk_txt: Optional[str] = None
-                                    if resolved.is_file():
-                                        try:
-                                            disk_txt = resolved.read_text(encoding="utf-8")
-                                        except Exception:
-                                            disk_txt = params.get("Content")
-                                    elif isinstance(params.get("Content"), str):
-                                        disk_txt = params.get("Content")
-                                    if on_file_write is not None:
-                                        on_file_write(resolved, disk_txt)
-                        elif state == "ERROR":
-                            _emit_status(f"AGY TOOL BLOCKED: {label}")
+                    elif evt_type == "step_update":
+                        su = parsed_evt.get("step_update") or {}
+                        step_type = su.get("step_type", "")
+                        state = su.get("state", "")
 
-                elif evt_type == "result":
-                    res_obj = parsed_evt.get("result") or {}
-                    conv_id = res_obj.get("conversation_id") or conv_id
-                    final_resp = res_obj.get("response") or ""
-                    if final_resp and not "".join(text_chunks).strip():
-                        _emit_delta(final_resp)
-                    status_val = res_obj.get("status")
-                    if status_val not in (None, "SUCCESS"):
-                        result_error = res_obj.get("error") or f"Antigravity CLI returned status: {status_val}"
+                        if step_type == "user_input" and state == "DONE":
+                            _emit_status(f"{tag} THINKING...")
+                        elif su.get("thinking_delta"):
+                            _emit_status(f"{tag} REASONING...")
+                        elif step_type == "agent_response":
+                            td = su.get("text_delta") or ""
+                            if td:
+                                saw_stream_deltas = True
+                                _emit_delta(td)
+                                _emit_status(f"{tag} STREAMING CODE...")
+                            elif state == "DONE":
+                                _emit_status(f"{tag} PREPARING NEXT STEP...")
+                        elif step_type == "tool":
+                            t_info = su.get("tool_info") or {}
+                            t_name = su.get("tool_name") or t_info.get("name") or "tool"
+                            params = t_info.get("parameters") or {}
+                            target_hint = self._summarize_tool_target(params) if isinstance(params, dict) else ""
+                            label = f"{t_name} ({target_hint})" if target_hint else t_name
 
-                elif evt_type == "error":
-                    err_obj = parsed_evt.get("error")
-                    result_error = str(err_obj) if err_obj else "Antigravity CLI reported an error event."
+                            if state == "ACTIVE":
+                                _emit_status(f"{tag} TOOL: {label}")
+                                if t_name in file_write_tools and isinstance(params, dict) and on_file_edit_start is not None:
+                                    resolved = _resolve_tool_path(params)
+                                    if resolved is not None:
+                                        on_file_edit_start(resolved)
+                            elif state == "DONE":
+                                if t_name in file_write_tools and isinstance(params, dict):
+                                    resolved = _resolve_tool_path(params)
+                                    if resolved is not None:
+                                        _record_file_write(resolved, params.get("Content") or params.get("content"))
+                            elif state == "ERROR":
+                                _emit_status(f"{tag} TOOL BLOCKED: {label}")
+
+                    elif evt_type == "result":
+                        res_obj = parsed_evt.get("result") or {}
+                        conv_id = res_obj.get("conversation_id") or conv_id
+                        final_resp = res_obj.get("response") or ""
+                        if final_resp and not "".join(text_chunks).strip():
+                            _emit_delta(final_resp)
+                        status_val = res_obj.get("status")
+                        if status_val not in (None, "SUCCESS"):
+                            result_error = res_obj.get("error") or f"{disp_name} returned status: {status_val}"
+
+                    elif evt_type == "error":
+                        err_obj = parsed_evt.get("error")
+                        result_error = str(err_obj) if err_obj else f"{disp_name} reported an error event."
+
+                else:
+                    # Claude Code CLI (`--output-format stream-json`) event schema
+                    msg_type = parsed_evt.get("type")
+                    if msg_type == "system":
+                        conv_id = parsed_evt.get("session_id") or conv_id
+                        if parsed_evt.get("subtype") == "init":
+                            short_id = conv_id[:8] if isinstance(conv_id, str) and conv_id else "ready"
+                            _emit_status(f"{tag} CONNECTED ({short_id}) — READING C64 CONTEXT...")
+
+                    elif msg_type == "stream_event":
+                        ev = parsed_evt.get("event") or {}
+                        ev_t = ev.get("type")
+                        if ev_t == "message_start":
+                            _emit_status(f"{tag} THINKING...")
+                        elif ev_t == "content_block_start":
+                            cb = ev.get("content_block") or {}
+                            if cb.get("type") == "tool_use":
+                                t_name = cb.get("name") or "tool"
+                                _emit_status(f"{tag} TOOL: {t_name}")
+                            elif cb.get("type") == "thinking":
+                                _emit_status(f"{tag} REASONING...")
+                        elif ev_t == "content_block_delta":
+                            delta_obj = ev.get("delta") or {}
+                            d_type = delta_obj.get("type")
+                            if d_type == "text_delta":
+                                td = delta_obj.get("text") or ""
+                                if td:
+                                    saw_stream_deltas = True
+                                    _emit_delta(td)
+                                    _emit_status(f"{tag} STREAMING CODE...")
+                            elif d_type == "thinking_delta":
+                                _emit_status(f"{tag} REASONING...")
+
+                    elif msg_type == "assistant":
+                        msg_obj = parsed_evt.get("message") or {}
+                        for block in msg_obj.get("content") or []:
+                            if not isinstance(block, dict):
+                                continue
+                            b_type = block.get("type")
+                            if b_type == "text" and not saw_stream_deltas:
+                                txt = block.get("text") or ""
+                                if txt:
+                                    _emit_delta(txt)
+                            elif b_type == "tool_use":
+                                t_name = block.get("name") or "tool"
+                                params = block.get("input") or {}
+                                target_hint = self._summarize_tool_target(params) if isinstance(params, dict) else ""
+                                label = f"{t_name} ({target_hint})" if target_hint else t_name
+                                _emit_status(f"{tag} TOOL: {label}")
+                                if t_name in file_write_tools and isinstance(params, dict):
+                                    resolved = _resolve_tool_path(params)
+                                    if resolved is not None:
+                                        if on_file_edit_start is not None:
+                                            on_file_edit_start(resolved)
+                                        _record_file_write(resolved, params.get("content") or params.get("Content"))
+
+                    elif msg_type == "user":
+                        # Tool results returned to Claude
+                        msg_obj = parsed_evt.get("message") or {}
+                        for block in msg_obj.get("content") or []:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                if block.get("is_error"):
+                                    _emit_status(f"{tag} TOOL BLOCKED")
+                                elif touched_files and on_file_write is not None:
+                                    # Re-sync latest touched file once tool_result confirms disk write
+                                    _record_file_write(touched_files[-1])
+
+                    elif msg_type == "result":
+                        conv_id = parsed_evt.get("session_id") or conv_id
+                        final_resp = parsed_evt.get("result") or ""
+                        if isinstance(final_resp, str) and final_resp and not "".join(text_chunks).strip():
+                            _emit_delta(final_resp)
+                        if parsed_evt.get("is_error"):
+                            errs = parsed_evt.get("errors")
+                            if isinstance(errs, list) and errs:
+                                result_error = "; ".join(str(e) for e in errs)
+                            else:
+                                result_error = (final_resp if isinstance(final_resp, str) and final_resp else None) or f"{disp_name} returned an error."
+
+                    elif msg_type == "error":
+                        err_obj = parsed_evt.get("error")
+                        result_error = str(err_obj) if err_obj else f"{disp_name} reported an error event."
 
             if line_buffer and on_line is not None:
                 on_line(line_buffer.rstrip("\r"))
@@ -959,12 +1242,12 @@ class AgyCliConnector:
                     result_error
                     or stderr_text.strip()
                     or response_text
-                    or f"agy exited with status {rc}"
+                    or f"{prov} exited with status {rc}"
                 )
                 if "permission" in err_msg.lower() and "headless" in err_msg.lower():
                     err_msg += (
-                        "\n💡 Tip: Switch MODE from 'accept-edits' to 'auto' in the 5:AGY AI toolbar "
-                        "when you want Antigravity to execute shell or hardware commands autonomously."
+                        "\n💡 Tip: Switch MODE from 'accept-edits' to 'auto' in the 5:AI HUB toolbar "
+                        f"when you want {disp_name} to execute shell or hardware commands autonomously."
                     )
 
             return AgyPromptResult(
@@ -985,7 +1268,7 @@ class AgyCliConnector:
                 stderr="".join(stderr_chunks),
                 return_code=-1,
                 command=cmd,
-                error_message=f"Antigravity CLI execution error: {exc}",
+                error_message=f"{disp_name} execution error: {exc}",
                 touched_files=touched_files,
                 conversation_id=conv_id,
             )

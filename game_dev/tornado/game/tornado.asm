@@ -30,8 +30,8 @@
 * = $6000 "Loading Koala"
         .import binary "../loading/loading.kla", 2
 
-* = $8800 "Tiles & Map"
-#import "../map/tornado_tiles.asm"
+* = $8800 "Iso Terrain & Map"
+#import "../map/tornado_iso.asm"
 
 // ------------------------------------------------------------------------------
 // Hardware & Memory Constants
@@ -48,6 +48,14 @@
 .const VIEW_TH   = 11           // 11 tiles tall (22 chars; rows 22-24 = HUD)
 .const BASE_TX   = 3            // Home Base Helipad tile X (cols 3-4)
 .const BASE_TY   = 55           // Home Base Helipad tile Y (rows 55-56)
+.const GRAB_TIME = 72            // frames from capture to explosion (~1.4 s)
+.const WINCH_TOL = 6            // px: survivor must be this close below the heli
+.const WINCH_MAX = 19           // px: longest rope the hook frames can draw
+.const WINCH_HOLD = 12          // px: drift allowed while the hook goes down
+.const HUD_SPLIT = 215          // first raster IRQ of the HUD split (see raster_irq)
+.const HUD_DIV   = 21           // HUD screen rows: divider line,
+.const HUD_ROW1  = 22           //   fuel / alt / score,
+.const HUD_ROW2  = 23           //   rescue / lives / status
 .const NUM_TORNS = 3            // 3 active cyclones across the 64x64 world
 
 // ------------------------------------------------------------------------------
@@ -89,7 +97,7 @@
 .label cam_cy     = $56         // char Y = cam_py >> 3 (0..106)
 .label fine_x     = $52         // 7 - (cam_px & 7)
 .label fine_y     = $53         // 7 - (cam_py & 7)
-.label irq_phase  = $54         // 0=HUD split (224), 1=VBL restore (252)
+.label irq_phase  = $54         // 0=split 215, 1=split 219/223, 2=VBL restore (252)
 .label back_page  = $57         // 0 = draw $4000, 4 = draw $4400
 .label d018_val   = $58         // $02 ($4000) or $12 ($4400): page shown after the last publish
 
@@ -112,6 +120,32 @@
 .label jvec       = $68         // 2 bytes
 .label lag_x      = $6A         // signed camera lag (px) vs. the centred heli
 .label lag_y      = $6B
+.label winch_dx   = $6C         // hook X offset from the heli (signed px)
+.label w_tx       = $6D         // winch scratch: target hook X offset
+.label w_lt       = $6E         //   target rope length
+.label w_tol      = $6F         //   tolerance for survivor_offset
+.label w_v        = $70
+.label w_hi       = $71
+.label grab_timer = $72         // >0: heli caught by a cyclone (frames to the blast)
+.label grab_idx   = $73         // which cyclone has it
+// isometric renderer scratch (RowCodes, draw_col, terrain_at)
+.label rc_cy      = $74
+.label rc_cx      = $75
+.label rc_n       = $76
+.label rc_pu      = $77         // 2 bytes
+.label rc_pl      = $79         // 2 bytes
+.label rc_s       = $7B
+.label rc_i       = $7C
+.label rc_l       = $7D
+.label rc_c       = $7E
+.label dc_q       = $7F         // 2 bytes
+.label dc_u       = $81         // 2 bytes
+.label dc_l       = $83         // 2 bytes
+.label tg_x       = $85         // 2 bytes
+.label tg_y       = $87         // 2 bytes
+.label tg_yb      = $89
+.label tg_cx      = $8A
+.label tg_q       = $8B
 
 // Cyclone world pixel coordinates (0..1023, 3 cyclones)
 .label torn_wx_lo    = $40      // 3 bytes ($40..$42)
@@ -196,6 +230,8 @@ boot:
         sta $DD02
         jsr $1000               // Init TORNADO SID music
         jsr build_colmap        // Per-char colour map used by the scroller
+        lda $7FFF               // Koala screen byte that doubles as the VIC idle byte
+        sta kla_idle_save
         cli
         jmp title_screen
 
@@ -206,6 +242,8 @@ nmi_rti:
 // Title Screen (Koala loading.kla)
 // ------------------------------------------------------------------------------
 title_screen:
+        lda kla_idle_save       // put back the Koala byte cleared for the HUD gap
+        sta $7FFF
         lda #$00
         sta $D015
         ldx #$00
@@ -305,12 +343,13 @@ new_game:
         bpl !init_t-
 
 respawn_heli:
-        // Place helicopter on Home Base Helipad (tile 3, 55 -> px 64, 888 = $0040, $0378)
-        lda #$40
+        // Place helicopter over the Home Base Helipad (ground point = pad centre;
+        // heli px 44, 872 = $002C, $0368)
+        lda #$2C
         sta heli_wx_lo
         lda #$00
         sta heli_wx_hi
-        lda #$78
+        lda #$68
         sta heli_wy_lo
         lda #$03
         sta heli_wy_hi
@@ -329,26 +368,29 @@ respawn_heli:
         sta expl_timer
         sta msg_state
         sta winch_state
+        sta grab_timer
 
-        // Center camera on base (64x64 world -> cam_px = 0, cam_py = 800 = $0320)
+        // Center camera on base (cam_px = 0, cam_py = 872 - 88 = 784 = $0310)
         lda #$00
         sta cam_px_lo
         sta cam_px_hi
         sta cam_cx
         sta cam_tx
-        lda #$20
+        lda #$10
         sta cam_py_lo
         lda #$03
         sta cam_py_hi
-        lda #100
+        lda #98
         sta cam_cy
-        lda #50
+        lda #49
         sta cam_ty
         lda #$07
         sta fine_x
         sta fine_y
 
 setup_game_vic:
+        lda #$00                // idle lines above the HUD show byte $7FFF: blank it
+        sta $7FFF
         lda #$00
         sta $D015
         lda $DD00
@@ -396,7 +438,7 @@ setup_game_vic:
         lda #$01
         sta $D026
 
-        // Sprite config: 0=Heli, 1=Shadow, 2=Torn0(2x), 3=Person, 4=Hook, 5=Torn1(2x), 6=Torn2(2x)
+        // Sprite config: 0=Heli, 2=Torn0(2x), 3=Person, 4=Hook, 5=Torn1(2x), 6=Torn2(2x), 7=Shadow
         lda #$6D                // Multicolor on 0, 2, 3, 5, 6
         sta $D01C
         lda #$64                // Double height+width on Sprites 2, 5, 6 (Tornadoes)
@@ -405,7 +447,7 @@ setup_game_vic:
         lda #$07                // Yellow heli
         sta $D027
         lda #$00                // Black shadow
-        sta $D028
+        sta $D02E
         lda #$03                // Cyan tornado 0
         sta $D029
         lda #$0A                // Light red survivor
@@ -428,7 +470,7 @@ setup_game_vic:
         sta $FFFF
         lda #$00
         sta irq_phase
-        lda #224
+        lda #HUD_SPLIT
         sta $D012
         lda #$01
         sta $D019
@@ -639,6 +681,10 @@ check_music_key:
 // Helicopter Physics, Altitude & Landing
 // ------------------------------------------------------------------------------
 update_heli:
+        lda grab_timer
+        beq !free+
+        jmp heli_grabbed
+!free:
         // Fire toggles landing / takeoff
         lda joy_bits
         and #$10
@@ -656,7 +702,11 @@ update_heli:
         sta fire_prev
 !after_fire:
 
-        // Adjust altitude toward target (0 if landed, 12 if airborne)
+        // Adjust altitude toward target (0 if landed, 12 if airborne), 1 px
+        // every 2nd frame so take-off and landing are visible (~0.5 s)
+        lda anim_cnt
+        and #$01
+        bne !alt_ok+
         lda heli_land
         bne !descend+
         lda heli_alt
@@ -1204,27 +1254,62 @@ update_camera:
 // The main loop publishes one complete frame state (nx_d011/d016/d018 + the
 // sprite shadow) with publish_frame; the IRQ applies all of it in the border
 // at once, so fine scroll, screen page and sprites can never disagree.
+// HUD split. Playfield row 20 (the last) is shown on lines 208+fine_y ..
+// 215+fine_y. The HUD must always start on the same raster line AND right
+// after row 20 in the VIC's row counter: if a partial "gap" row is displayed
+// for some fine_y values and not others, the HUD shows different screen rows
+// from frame to frame (the flicker seen while scrolling up and down).
+// So the VIC is kept idle between row 20 and the HUD for every fine_y:
+//   line 215: YSCROLL=6 - after row 20 has started for every fine_y, before
+//             line 216 can start a row (fine_y = 0). No line 215..219 is = 6.
+//   line 219: YSCROLL=7 - no line 219..222 is = 7, so the next row starts on
+//             line 223 for every fine_y: the HUD (screen rows 21-23).
+//   line 223: 40 columns, XSCROLL=0, written before the HUD's first pixel
+//             (and after row 20's last line, 222 at most).
+// The idle lines in between show byte $7FFF, which is cleared during play.
 raster_irq:
         pha
-        txa
-        pha
-        tya
-        pha
         lda irq_phase
-        bne !irq_top+
-        // Line 224 (blank Row 21 gap): lock HUD rows 22-24 to 40-col, XSCROLL=0, YSCROLL=3
-        lda #$1B
+        beq !split1+
+        cmp #$01
+        beq !split2+
+        jmp !irq_top+
+!split1:
+        lda #$16                // 24 rows, YSCROLL = 6
         sta $D011
-        lda #$18
-        sta $D016
-        lda #252
+        lda #219
         sta $D012
         lda #$01
         sta irq_phase
         sta $D019
-        jmp !irq_out+
+        pla
+        rti
+!split2:
+        lda #$17                // 24 rows, YSCROLL = 7: HUD starts at 223
+        sta $D011
+        txa
+        pha
+        ldx #$18                // HUD: 40 cols, XSCROLL = 0
+        lda #223
+!wt:    cmp $D012
+        bne !wt-
+        stx $D016
+        lda #252
+        sta $D012
+        lda #$02
+        sta irq_phase
+        lda #$01
+        sta $D019
+        pla
+        tax
+        pla
+        rti
 
 !irq_top:
+        txa
+        pha
+        tya
+        pha
         // Line 252 (HUD finished): apply the published frame
         lda st_ready
         beq !keep+
@@ -1250,7 +1335,7 @@ raster_irq:
         sta $D011
         lda disp_d016
         sta $D016
-        lda #224
+        lda #HUD_SPLIT
         sta $D012
         lda #$00
         sta irq_phase
@@ -1434,17 +1519,29 @@ update_tornado:
 // Collisions: Crates, Helipad Refuel/Win, Cyclone & Sea Landing
 // ------------------------------------------------------------------------------
 check_collisions:
-        // Get tile under helicopter
-        lda zp_ty
+        lda grab_timer          // caught or already exploding: nothing to check
+        ora expl_timer
+        beq !cc_go+
+        rts
+!cc_go:
+        // Terrain under the heli's ground point (the middle of its shadow)
+        lda heli_wx_lo
+        clc
+        adc #11
+        sta tg_x
+        lda heli_wx_hi
+        adc #$00
+        sta tg_x + 1
+        lda heli_wy_lo
+        clc
+        adc #22
+        sta tg_y
+        lda heli_wy_hi
+        adc #$00
+        sta tg_y + 1
+        jsr terrain_at
         tax
-        lda map_row_lo, x
-        sta zp_ptr
-        lda map_row_hi, x
-        sta zp_ptr + 1
-        ldy zp_tx
-        lda (zp_ptr), y
-        tax
-        lda tile_flags, x
+        lda terrain_flags, x
         sta zp_tmp              // TF_LAND=1, TF_BASE=2, TF_HAZARD=4
 
         // If landed (alt == 0): safe on LAND/BASE, crash in SEA (0) or HAZARD (4)
@@ -1534,48 +1631,29 @@ check_collisions:
         jmp !do_winch+
 
 !find_survivor:
-        // Trigger winch when helicopter hovers within 18px of an active survivor
+        // Start the winch when a survivor stands within WINCH_TOL px of the
+        // spot on the ground straight below the hovering helicopter.
+        // Sprite-anchor maths (all sprites share one anchor): the heli's ground
+        // point is (heli_wx, heli_wy + 12), a survivor's feet sit 3 px above
+        // their anchor's ground row, so the target is (heli_wx, heli_wy + 9).
+        lda heli_land
+        bne !c_none+
+        lda heli_alt
+        cmp #6
+        bcc !c_none+
         ldx #$04
 !c_lp:
         lda crate_active, x
         beq !c_next+
-        lda heli_wx_lo
-        sec
-        sbc crate_wx_lo, x
-        sta zp_dx
-        lda heli_wx_hi
-        sbc crate_wx_hi, x
-        beq !c_dx_ok+
-        cmp #$FF
-        bne !c_next+
-!c_dx_ok:
-        lda zp_dx
-        cmp #18
-        bcc !c_chk_y+
-        cmp #(256 - 18)
+        ldy #WINCH_TOL
+        jsr survivor_offset
         bcc !c_next+
-!c_chk_y:
-        lda heli_wy_lo
-        sec
-        sbc crate_wy_lo, x
-        sta zp_dy
-        lda heli_wy_hi
-        sbc crate_wy_hi, x
-        beq !c_dy_ok+
-        cmp #$FF
-        bne !c_next+
-!c_dy_ok:
-        lda zp_dy
-        cmp #18
-        bcc !c_start_w+
-        cmp #(256 - 18)
-        bcc !c_next+
-!c_start_w:
         stx winch_idx
         lda #$01                // Lowering hook
         sta winch_state
         lda #$00
         sta winch_y
+        sta winch_dx
         sta winch_sub
         lda #$06
         sta msg_state
@@ -1583,81 +1661,111 @@ check_collisions:
 !c_next:
         dex
         bpl !c_lp-
+!c_none:
         jmp !chk_torn+
 
 !do_winch:
-        // Verify helicopter hasn't flown far away (> 28px) while lowering
         ldx winch_idx
         lda winch_state
         cmp #$02
-        beq !winch_lift+
-        lda heli_wx_lo
-        sec
-        sbc crate_wx_lo, x
-        sta zp_dx
-        lda heli_wx_hi
-        sbc crate_wx_hi, x
-        beq !wdx_ok+
-        cmp #$FF
+        bne !winch_lower+
+        jmp !winch_lift+
+
+!winch_lower:
+        // Hook goes down (and sideways) until its tip is at the survivor's
+        // hands; cancelled if the heli lands or drifts off the survivor.
+        lda heli_land
         bne !winch_cancel+
-!wdx_ok:
-        lda zp_dx
-        cmp #28
-        bcc !w_chk_y+
-        cmp #(256 - 28)
-        bcc !winch_cancel+
-!w_chk_y:
-        lda heli_wy_lo
-        sec
-        sbc crate_wy_lo, x
-        sta zp_dy
-        lda heli_wy_hi
-        sbc crate_wy_hi, x
-        beq !wdy_ok+
-        cmp #$FF
-        bne !winch_cancel+
-!wdy_ok:
-        lda zp_dy
-        cmp #28
-        bcc !winch_lower+
-        cmp #(256 - 28)
-        bcs !winch_lower+
+        ldy #WINCH_HOLD
+        jsr survivor_offset     // also leaves the X offset in w_tx
+        bcs !wl_track+
 !winch_cancel:
         lda #$00
         sta winch_state
         jmp !chk_torn+
-
-!winch_lower:
-        // Lower hook every 2nd frame until winch_y == 16
-        inc winch_sub
-        lda winch_sub
-        and #$01
-        bne !w_done+
-        inc winch_y
-        lda winch_y
-        cmp #16
-        bcc !w_done+
-        lda #$02                // Hook reached survivor: start slow lift!
-        sta winch_state
+!wl_track:
+        // Rope length to the hands: the hook tip (heli drawn Y + 14 + n) meets
+        // the hands (survivor Y + 10); heli drawn Y = heli_wy + 12 - heli_alt,
+        // so n = (crate_wy - heli_wy) - 16 + heli_alt, kept in 0..WINCH_MAX.
+        lda crate_wy_lo, x
+        sec
+        sbc heli_wy_lo
+        sec
+        sbc #16
+        clc
+        adc heli_alt
+        bpl !lt_pos+
         lda #$00
-        sta winch_sub
-        jmp !chk_torn+
-
-!winch_lift:
-        // Lift survivor slowly (1px every 3rd frame) until winch_y == 0
+!lt_pos:
+        cmp #WINCH_MAX + 1
+        bcc !lt_ok+
+        lda #WINCH_MAX
+!lt_ok: sta w_lt
+        // Step the hook 1 px every 3rd frame on each axis
         inc winch_sub
         lda winch_sub
         cmp #$03
-        bcc !w_done+
+        bcs !wl_step+
+        jmp !w_done+
+!wl_step:
         lda #$00
         sta winch_sub
+        lda winch_dx
+        cmp w_tx
+        beq !wl_y+
+        sec
+        sbc w_tx
+        bmi !wl_xr+
+        dec winch_dx
+        jmp !wl_y+
+!wl_xr: inc winch_dx
+!wl_y:
+        lda winch_y
+        cmp w_lt
+        beq !wl_at+
+        bcc !wl_down+
+        dec winch_y
+        jmp !w_done+
+!wl_down:
+        inc winch_y
+        jmp !w_done+
+!wl_at:
+        lda winch_dx
+        cmp w_tx
+        bne !w_done+
+        lda #$02                // Hooked: short pause, then the lift
+        sta winch_state
+        lda #(256 - 11)         // winch_sub counts up to 5: ~16 frames
+        sta winch_sub
+        jmp !w_done+
+
+!winch_lift:
+        // Reel the survivor up into the heli (1 px every 5th frame) while
+        // they swing in under it.
+        inc winch_sub
+        lda winch_sub
+        cmp #$05
+        bne !w_done+
+        lda #$00
+        sta winch_sub
+        lda winch_dx
+        beq !wf_y+
+        bmi !wf_r+
+        dec winch_dx
+        jmp !wf_y+
+!wf_r:  inc winch_dx
+!wf_y:
+        lda winch_y
+        beq !w_aboard+
         dec winch_y
         bne !w_done+
+!w_aboard:
         // Survivor safely aboard!
         ldx winch_idx
         lda #$00
         sta crate_active, x
         sta winch_state
+        sta winch_dx
         inc crates_got
         lda #$02
         sta msg_state
@@ -1739,12 +1847,117 @@ check_collisions:
         sta torn_near
         lda heli_alt            // Safe if landed!
         beq !safe_ground+
-!crash_now:
+        // Caught: the cyclone pulls the heli in, spins it, then it explodes
+        lda #GRAB_TIME
+        sta grab_timer
+        lda torn_near_idx
+        sta grab_idx
+        lda #$00
+        sta winch_state         // drop any rescue in progress
+        sta heli_land
+        sta heli_vx
+        sta heli_vy
+!safe_ground:
+        rts
+!crash_now:                     // landed in the sea or on rocks
         lda #36
         sta expl_timer
         jsr play_sfx_boom
-!safe_ground:
         rts
+
+
+// ------------------------------------------------------------------------------
+// Caught by a cyclone: pulled into the funnel, spun faster and faster while
+// being lifted, then the heli explodes. Replaces update_heli while grab_timer > 0.
+// ------------------------------------------------------------------------------
+heli_grabbed:
+        ldx grab_idx
+        // Funnel middle: the 48x42 cyclone sprite's centre (24, 20) over the
+        // heli body's centre (11, 10 + 12 - heli_alt)
+        lda torn_wx_lo, x
+        clc
+        adc #12
+        sta w_v
+        lda torn_wx_hi, x
+        adc #$00
+        sta w_hi
+        ldx #$00                // X axis
+        jsr grab_step
+        jsr grab_step           // 2 px per frame
+        ldx grab_idx
+        lda torn_wy_lo, x
+        clc
+        adc #8
+        sta w_v
+        lda torn_wy_hi, x
+        adc #$00
+        sta w_hi
+        ldx #$02                // Y axis
+        jsr grab_step
+        jsr grab_step
+
+        // Lifted up the funnel (altitude 12 -> 15)
+        lda anim_cnt
+        and #$07
+        bne !g_spin+
+        lda heli_alt
+        cmp #15
+        bcs !g_spin+
+        inc heli_alt
+!g_spin:
+        // Spin: one direction step every 4, then 2, then every frame
+        lda grab_timer
+        cmp #(GRAB_TIME * 2 / 3)
+        bcs !g_slow+
+        cmp #(GRAB_TIME / 3)
+        bcs !g_mid+
+        jmp !g_turn+
+!g_slow:
+        lda anim_cnt
+        and #$03
+        bne !g_count+
+        jmp !g_turn+
+!g_mid:
+        lda anim_cnt
+        and #$01
+        bne !g_count+
+!g_turn:
+        lda heli_dir
+        clc
+        adc #$01
+        and #$07
+        sta heli_dir
+!g_count:
+        dec grab_timer
+        bne !g_done+
+        lda #36                 // Torn apart
+        sta expl_timer
+        jsr play_sfx_boom
+!g_done:
+        rts
+
+// Move heli world coord X=0 (x) / X=2 (y) 1 px toward the 16-bit w_v/w_hi
+grab_step:
+        lda heli_wx_lo, x
+        cmp w_v
+        lda heli_wx_hi, x
+        sbc w_hi
+        bcc !up+
+        lda heli_wx_lo, x
+        cmp w_v
+        bne !down+
+        lda heli_wx_hi, x
+        cmp w_hi
+        beq !done+
+!down:  lda heli_wx_lo, x
+        bne !nb+
+        dec heli_wx_hi, x
+!nb:    dec heli_wx_lo, x
+        rts
+!up:    inc heli_wx_lo, x
+        bne !done+
+        inc heli_wx_hi, x
+!done:  rts
 
 // ------------------------------------------------------------------------------
 // Fuel Consumption
@@ -1769,6 +1982,57 @@ update_fuel:
 !f_done:
         rts
 
+// Survivor X relative to the heli's ground point. In: X = survivor, Y = px
+// tolerance. Out: C=1 if |crate_wx - heli_wx| <= Y and
+// |crate_wy - (heli_wy + 9)| <= Y; w_tx = crate_wx - heli_wx (signed byte).
+survivor_offset:
+        sty w_tol
+        lda crate_wx_lo, x
+        sec
+        sbc heli_wx_lo
+        sta w_tx
+        sta w_v
+        lda crate_wx_hi, x
+        sbc heli_wx_hi
+        jsr in_tol
+        bcc !out+
+        lda crate_wy_lo, x
+        sec
+        sbc heli_wy_lo
+        sta w_v
+        lda crate_wy_hi, x
+        sbc heli_wy_hi
+        sta w_hi
+        lda w_v
+        sec
+        sbc #9
+        sta w_v
+        lda w_hi
+        sbc #$00
+        jsr in_tol
+!out:   rts
+
+// In: A = high byte, w_v = low byte of a signed 16-bit value.
+// Out: C=1 if |value| <= w_tol.
+in_tol:
+        beq !pos+
+        cmp #$FF
+        bne !no+
+        lda w_v
+        beq !no+                // -256
+        eor #$FF
+        clc
+        adc #$01
+        jmp !cmp+
+!pos:   lda w_v
+!cmp:   cmp w_tol
+        beq !yes+
+        bcc !yes+
+!no:    clc
+        rts
+!yes:   sec
+        rts
+
 // ------------------------------------------------------------------------------
 // Sprites Update (World -> Screen Mapping)
 // ------------------------------------------------------------------------------
@@ -1791,12 +2055,18 @@ update_sprites:
         adc #$00
         sta zp_tmp              // bit 0 = MSB for heli & shadow
 
+        // heli_wy is where the heli is over the ground; the shadow is drawn
+        // there (+12) and the heli sits heli_alt px above it, so landing
+        // brings the heli down onto a shadow that stays put.
         lda heli_wy_lo
         sec
         sbc cam_py_lo
         clc
-        adc #55
-        sta vic_sh + $01
+        adc #55 + 12
+        sta vic_sh + $0F        // shadow Y (ground)
+        sec
+        sbc heli_alt
+        sta vic_sh + $01        // heli Y
 
         // Heli frame
         lda anim_cnt
@@ -1809,26 +2079,25 @@ update_sprites:
         adc #SPRPTR0 + SPR_HELI
         sta SPRPTR + 0
 
-        // Sprite 1: Shadow offset by altitude
+        // Sprite 7: Shadow on the ground, pushed sideways by the sun more the
+        // higher the heli is (0 px landed .. 4 px at full altitude). Sprite 7
+        // has the lowest priority, so survivors and the hook show on top of it.
+        ldx heli_alt
         lda vic_sh + $00
         clc
-        adc #$04
-        sta vic_sh + $02
-        lda vic_sh + $01
-        clc
-        adc heli_alt
-        sta vic_sh + $03
+        adc shadow_dx, x
+        sta vic_sh + $0E
         lda heli_dir
         clc
         adc #SPRPTR0 + SPR_SHADOW
-        sta SPRPTR + 1
+        sta SPRPTR + 7
 
         // SpriteEnable mask
-        lda #$03
-        sta zp_cx               // enable 0 & 1
+        lda #$81
+        sta zp_cx               // enable 0 (heli) & 7 (shadow)
         lda zp_tmp
         beq !no_msb01+
-        lda #$03
+        lda #$81
         jmp !msb_set01+
 !no_msb01:
         lda #$00
@@ -1914,6 +2183,77 @@ update_sprites:
 !torn_spr_done:
 
 !do_crate_spr:
+        // Sprite 4: winch hook hanging from the heli's centre (row 10). For a
+        // rope of n = winch_y px: frame n>>2 (cable 4*(n>>2) px), moved down
+        // n&3 px, so the hook tip is at heli Y + 14 + n and the cable always
+        // starts under the heli's body. X = heli X + winch_dx.
+        lda winch_state
+        beq !cs_scan+
+        ldy #$00
+        lda winch_dx
+        bpl !hk_p+
+        dey
+!hk_p:  clc
+        adc vic_sh + $00
+        sta vic_sh + $08
+        tya
+        adc #$00
+        sta zp_tmp
+        lda zp_cy               // heli MSB (bit 0)
+        and #$01
+        clc
+        adc zp_tmp
+        and #$01
+        beq !hk_no_msb+
+        lda zp_cy
+        ora #$10
+        sta zp_cy
+!hk_no_msb:
+        lda winch_y
+        cmp #WINCH_MAX + 1
+        bcc !hk_len+
+        lda #WINCH_MAX
+!hk_len:
+        sta zp_tmp
+        and #$03
+        clc
+        adc #10
+        adc vic_sh + $01
+        sta vic_sh + $09
+        lda zp_tmp
+        lsr
+        lsr
+        clc
+        adc #SPRPTR0 + SPR_HOOK
+        sta SPRPTR + 4
+        lda zp_cx
+        ora #$10
+        sta zp_cx
+
+        lda winch_state
+        cmp #$02
+        bne !cs_winch+
+        // Survivor on the hook: hands (row 10) on the hook tip (heli Y + 14 + n)
+        lda vic_sh + $08
+        sta vic_sh + $06
+        lda vic_sh + $01
+        clc
+        adc #$04
+        adc zp_tmp
+        sta vic_sh + $07
+        lda zp_cy
+        and #$10
+        beq !cs_lift_msb+
+        lda zp_cy
+        ora #$08
+        sta zp_cy
+!cs_lift_msb:
+        jmp !cs_frame+
+!cs_winch:
+        ldx winch_idx           // show the survivor being winched
+        jmp !cs_act+
+
+!cs_scan:
         // Find first active crate inside viewport
         ldx #$04
 !cs_lp:
@@ -1949,17 +2289,6 @@ update_sprites:
         bcs !cs_next+
         clc
         adc #55
-        // If lifting this survivor (winch_state == 2 && x == winch_idx), raise Y by (16 - winch_y)
-        ldy winch_state
-        cpy #$02
-        bne !c_y_set+
-        cpx winch_idx
-        bne !c_y_set+
-        sec
-        sbc #16
-        clc
-        adc winch_y
-!c_y_set:
         sta vic_sh + $07
         lda zp_ptr
         clc
@@ -1967,11 +2296,11 @@ update_sprites:
         sta vic_sh + $06
         lda zp_tmp
         adc #$00
-        beq !c_no_msb+
+        beq !cs_frame+
         lda zp_cy
         ora #$08
         sta zp_cy
-!c_no_msb:
+!cs_frame:
         lda anim_cnt
         lsr
         lsr
@@ -1982,42 +2311,17 @@ update_sprites:
         lda zp_cx
         ora #$08
         sta zp_cx
-        jmp !do_hook_spr+
+        jmp !apply_spr+
 !cs_next_p:
         pla
 !cs_next:
         dex
-        bmi !do_hook_spr+
+        bmi !apply_spr+
         jmp !cs_lp-
-
-!do_hook_spr:
-        // Sprite 4: Rescue Winch Hook when winch_state != 0
-        lda winch_state
-        beq !apply_spr+
-        lda vic_sh + $00
-        sta vic_sh + $08
-        lda zp_cy
-        and #$01
-        beq !hk_no_msb+
-        lda zp_cy
-        ora #$10
-        sta zp_cy
-!hk_no_msb:
-        lda vic_sh + $01
-        clc
-        adc winch_y
-        sec
-        sbc #$02
-        sta vic_sh + $09
-        lda #SPRPTR0 + SPR_HOOK
-        sta SPRPTR + 4
-        lda zp_cx
-        ora #$10
-        sta zp_cx
 
 !apply_spr:
         // Mirror sprite pointers to second screen page ($47F8)
-        ldx #$06
+        ldx #$07
 !spr_mir:
         lda SPRPTR, x
         sta SPRPTR + $0400, x
@@ -2045,6 +2349,7 @@ update_sprites_expl:
         clc
         adc #SPRPTR0 + SPR_EXPLOSION
         sta SPRPTR + 0
+        sta SPRPTR + $0400 + 0  // both pages (the shown one alternates)
         lda #$08                // Orange explosion
         sta $D027
         rts
@@ -2052,16 +2357,24 @@ update_sprites_expl:
 // ------------------------------------------------------------------------------
 // Playfield rendering (double-buffered chars, colour RAM from a colour map)
 //
+// The world is isometric (tools/isotiles/iso_tool.py): 32x16 px diamonds in
+// staggered rows 8 px apart. Character (cx, cy) sits between diamond U =
+// iso_map[cy][i + (q >> 1)] and L = iso_map[cy + 1][i + s], where s = cy & 1,
+// a = cx + 4 - 2s, q = a & 3, i = a >> 2; its screen code is
+// iso_chr[q*64 + U*8 + L] and its colour iso_col[...].
+//
 // Chars: the back page is built while the front page is shown. When the camera
 // crosses one char (any of 8 directions) the front page is copied into the back
 // page shifted by one char (~8k cycles) and only the new edge row/column is
-// drawn from the tile map. A full redraw (~25k cycles) is only used for jumps
-// (start, respawn, leaving the tactical map).
-// Colour RAM: colours are per tile, so COLMAP holds a colour for every char
-// column of every tile row (64 x 128 bytes). On a page flip the raster IRQ
-// copies the 21 visible rows straight from it (cc_pass1/cc_pass2).
+// drawn. A full redraw is only used for jumps (start, respawn, tactical map).
+// Colour RAM: COLMAP holds the colour of every world char (128 x 128, built at
+// boot). On a page flip the raster IRQ copies the 21 visible rows from it.
 // ------------------------------------------------------------------------------
-.const COLMAP = $A000           // 64 tile rows x 128 char cols (RAM under BASIC)
+.const COLMAP = $A000           // first COLMAP row (cc_pass operands start here)
+.function cmRow(r) {
+    .if (r < 96) .return $A000 + r * 128      // $A000-$CFFF (RAM under BASIC)
+    .return $E000 + (r - 96) * 128            // $E000-$EFFF (RAM under KERNAL)
+}
 
 // Full redraw of the back page for (cam_cx, cam_cy)
 draw_map:
@@ -2122,14 +2435,21 @@ scroll_map:
         sta zp_row
         jsr draw_row
 finish_back:
-        jsr stamp_blocks
         lda #$01
         sta flip_pend
         rts
 !jump:  jmp (jvec)
 
-// Draw screen row zp_row (0..20) of the back page from the tile map
+// Draw screen row zp_row (0..20) of the back page
 draw_row:
+        lda cam_cy
+        clc
+        adc zp_row
+        sta rc_cy
+        lda cam_cx
+        sta rc_cx
+        lda #40
+        sta rc_n
         ldx zp_row
         lda full_row_lo, x
         sta zp_dst
@@ -2137,148 +2457,200 @@ draw_row:
         clc
         adc back_page
         sta zp_dst + 1
+        jmp row_chr
+
+// One world char row -> rc_n bytes at (zp_dst), from world char (rc_cx, rc_cy),
+// looked up in tab (iso_chr or iso_col). ~33 cycles per char.
+.macro RowCodes(tab) {
+        ldx rc_cy
+        lda iso_row_lo, x
+        sta rc_pu
+        lda iso_row_hi, x
+        sta rc_pu + 1
         txa
-        clc
-        adc cam_cy
-        lsr                     // tile Y, C = bottom half of the tile
-        tax
-        bcs !bot+
-        lda #<tile_c0
-        sta dr_l + 1
-        lda #>tile_c0
-        sta dr_l + 2
-        lda #<tile_c1
-        ldy #>tile_c1
-        jmp !tbl+
-!bot:   lda #<tile_c2
-        sta dr_l + 1
-        lda #>tile_c2
-        sta dr_l + 2
-        lda #<tile_c3
-        ldy #>tile_c3
-!tbl:   sta dr_r + 1
-        sty dr_r + 2
-        sta dr_r0 + 1
-        sty dr_r0 + 2
-
-        lda cam_cx
-        lsr
-        clc
-        adc map_row_lo, x
-        sta zp_ptr
-        lda map_row_hi, x
-        adc #$00
-        sta zp_ptr + 1
-
-        ldy #$00
-        sty zp_cx               // map index in the row
-        lda cam_cx
         and #$01
-        beq !lp+
-        // Odd cam_cx: col 0 = right char of tile 0
-        lda (zp_ptr), y
+        sta rc_s
+        clc
+        adc iso_row_lo + 1, x   // L row pointer, already offset by s
+        sta rc_pl
+        lda iso_row_hi + 1, x
+        adc #$00
+        sta rc_pl + 1
+        lda rc_s                // a = cx + 4 - 2s
+        asl
+        eor #$FF
+        sec
+        adc rc_cx
+        clc
+        adc #$04
+        pha
+        lsr
+        lsr
+        sta rc_i
+        tay
+        lda (rc_pl), y
+        sta rc_l
+        lda #$00
+        sta rc_c
+        pla
+        and #$03
+        beq q0
+        cmp #$02
+        beq q2x
+        bcs e3
+        ldy rc_i                // start on q1
+        lda (rc_pu), y
+        asl
+        asl
+        asl
+        ora rc_l
         tax
-dr_r0:  lda tile_c1, x
-        sta (zp_dst), y
-        inc zp_cx
+        ldy #$00
+        jmp q1
+e3:     ldy rc_i                // start on q3
         iny
-!lp:
-        sty zp_tmp
-        ldy zp_cx
-        lda (zp_ptr), y
+        lda (rc_pu), y
+        asl
+        asl
+        asl
+        ora rc_l
         tax
-        inc zp_cx
-        ldy zp_tmp
-dr_l:   lda tile_c0, x
+        ldy #$00
+        jmp q3
+q0:     ldy rc_i
+        lda (rc_pl), y
+        sta rc_l
+        lda (rc_pu), y
+        asl
+        asl
+        asl
+        ora rc_l
+        tax
+        ldy rc_c
+        lda tab, x
         sta (zp_dst), y
         iny
-        cpy #40
-        bcs !done+
-dr_r:   lda tile_c1, x
+        cpy rc_n
+        bcs done
+q1:     lda tab + 64, x
         sta (zp_dst), y
         iny
-        cpy #40
-        bcc !lp-
-!done:  rts
+        cpy rc_n
+        bcs done
+        sty rc_c
+q2x:    ldy rc_i
+        iny
+        lda (rc_pu), y
+        asl
+        asl
+        asl
+        ora rc_l
+        tax
+        ldy rc_c
+        lda tab + 128, x
+        sta (zp_dst), y
+        iny
+        cpy rc_n
+        bcs done
+q3:     lda tab + 192, x
+        sta (zp_dst), y
+        iny
+        cpy rc_n
+        bcs done
+        sty rc_c
+        inc rc_i
+        jmp q0
+done:   rts
+}
+row_chr: RowCodes(iso_chr)
+row_col: RowCodes(iso_col)
 
 // Draw screen column A (0 or 39) of the back page, rows 0..20
 draw_col:
         sta dc_scol
         clc
         adc cam_cx
-        lsr                     // tile X, C = right half of the tile
-        sta dc_tx
-        bcs !rt+
-        lda #<tile_c0
-        sta dc_t + 1
-        lda #>tile_c0
-        sta dc_t + 2
-        lda #<tile_c2
-        sta dc_b + 1
-        lda #>tile_c2
-        sta dc_b + 2
-        jmp !go+
-!rt:    lda #<tile_c1
-        sta dc_t + 1
-        lda #>tile_c1
-        sta dc_t + 2
-        lda #<tile_c3
-        sta dc_b + 1
-        lda #>tile_c3
-        sta dc_b + 2
-!go:
-        // zp_dst = back page + column, stepped 40 bytes per row
+        sta dc_tx               // world char column
+        // Per row parity s: a = cx + 4 - 2s, q = a & 3, i = a >> 2
+        ldx #$01
+!pre:   txa
+        asl
+        eor #$FF
+        sec
+        adc dc_tx
+        clc
+        adc #$04
+        pha
+        and #$03
+        tay
+        lda q_bits, y
+        sta dc_q, x
+        tya
+        lsr
+        sta zp_tmp              // q >> 1
+        pla
+        lsr
+        lsr                     // i
+        pha
+        clc
+        adc zp_tmp
+        sta dc_u, x             // U index: i + (q >> 1)
+        stx zp_tmp
+        pla
+        clc
+        adc zp_tmp
+        sta dc_l, x             // L index: i + s
+        dex
+        bpl !pre-
+
         lda back_page
         clc
         adc #>SCREEN
         sta zp_dst + 1
         lda dc_scol
         sta zp_dst
-        // zp_ptr = map row of the top tile + tile X, stepped 64 per tile row
-        lda cam_cy
-        lsr
-        tax
-        lda map_row_lo, x
-        clc
-        adc dc_tx
-        sta zp_ptr
-        lda map_row_hi, x
-        adc #$00
-        sta zp_ptr + 1
-        ldy #$00
-        lda cam_cy
-        and #$01
-        sta zp_cx               // 1 = next row is a bottom-half row
-        lda #21
-        sta zp_row              // rows left
+        lda #$00
+        sta zp_cx               // screen row
 !lp:
-        lda (zp_ptr), y
-        tax
-        lda zp_cx
-        bne !b+
-dc_t:   lda tile_c0, x
-        sta (zp_dst), y
-        inc zp_cx
-        jmp !nx+
-!b:
-dc_b:   lda tile_c2, x
-        sta (zp_dst), y
-        dec zp_cx
-        lda zp_ptr              // next tile row
+        lda cam_cy
         clc
-        adc #64
-        sta zp_ptr
-        bcc !nx+
-        inc zp_ptr + 1
-!nx:    lda zp_dst
+        adc zp_cx
+        tax
+        lda iso_row_lo, x
+        sta rc_pu
+        lda iso_row_hi, x
+        sta rc_pu + 1
+        lda iso_row_lo + 1, x
+        sta rc_pl
+        lda iso_row_hi + 1, x
+        sta rc_pl + 1
+        txa
+        and #$01
+        tax                     // s
+        ldy dc_u, x
+        lda (rc_pu), y
+        asl
+        asl
+        asl
+        ldy dc_l, x
+        ora (rc_pl), y
+        ora dc_q, x
+        tax
+        lda iso_chr, x
+        ldy #$00
+        sta (zp_dst), y
+        lda zp_dst
         clc
         adc #40
         sta zp_dst
         bcc !nc+
         inc zp_dst + 1
-!nc:    dec zp_row
-        bne !lp-
+!nc:    inc zp_cx
+        lda zp_cx
+        cmp #21
+        bcc !lp-
         rts
+q_bits: .byte $00, $40, $80, $C0
 
 // Shifted page copies: back[r][c] = front[r + dy][c + dx] for rows 0..20.
 // The edge row/column reads junk that draw_row/draw_col then overwrite.
@@ -2366,7 +2738,6 @@ patch_colsrc:
         lda cam_cy
         clc
         adc #r
-        lsr
         tay
         lda cm_row_lo, y
         clc
@@ -2376,191 +2747,161 @@ patch_colsrc:
         sta ccOp(r) + 1
     }
         rts
-cm_row_lo: .fill 64, <(COLMAP + i * 128)
-cm_row_hi: .fill 64, >(COLMAP + i * 128)
+cm_row_lo: .fill 128, <cmRow(i)
+cm_row_hi: .fill 128, >cmRow(i)
 
-// Build COLMAP from the tile map (once, at boot), with the base blocks baked in
+// Build COLMAP: the colour of every world char (once, at boot; ~0.5 s)
 build_colmap:
-        ldx #$00
+        lda #$00
+        sta zp_row
 !row:
-        lda map_row_lo, x
-        sta zp_ptr
-        lda map_row_hi, x
-        sta zp_ptr + 1
+        ldx zp_row
+        stx rc_cy
         lda cm_row_lo, x
         sta zp_dst
         lda cm_row_hi, x
         sta zp_dst + 1
-        stx zp_row
-        ldy #$00
-!col:
-        sty zp_tmp
-        lda (zp_ptr), y
-        tax
-        tya
-        asl
-        tay
-        lda tile_col, x
-        sta (zp_dst), y
-        iny
-        sta (zp_dst), y
-        ldy zp_tmp
-        iny
-        cpy #64
-        bne !col-
-        ldx zp_row
-        inx
-        cpx #64
-        bne !row-
-
-        lda block_col + B_HELIPAD
-        ora #$08
-    .for (var tr = 0; tr < 2; tr++) {
-        .for (var c = 0; c < 4; c++) {
-            sta COLMAP + (BASE_TY + tr) * 128 + BASE_TX * 2 + c
-        }
-    }
-        lda block_col + B_TOWER
-        ora #$08
-    .for (var tr = 0; tr < 2; tr++) {
-        .for (var c = 0; c < 4; c++) {
-            sta COLMAP + (BASE_TY - 1 + tr) * 128 + (BASE_TX + 2) * 2 + c
-        }
-    }
+        lda #$00
+        sta rc_cx
+        lda #128
+        sta rc_n
+        jsr row_col
+        inc zp_row
+        bpl !row-               // rows 0..127
         rts
 
-// Stamp the 4x4 Base Helipad & Control Tower into the back page (chars only)
-stamp_blocks:
-        lda #(BASE_TX * 2)
-        ldx #(BASE_TY * 2)
-        ldy #B_HELIPAD
-        jsr stamp_block_2x2
-        lda #((BASE_TX + 2) * 2)
-        ldx #((BASE_TY - 1) * 2)
-        ldy #B_TOWER
-        jmp stamp_block_2x2
-
-// Stamp 4x4 char block Y at map char (A=cx, X=cy) with full 4-edge clipping
-stamp_block_2x2:
-        sty zp_tmp              // block id
-        sec
-        sbc cam_cx
-        sta zp_cx               // signed start col (can be negative!)
+// Terrain under world pixel (tg_x, tg_y) -> A = terrain type (TR_*)
+terrain_at:
+        lda tg_y + 1
+        sta zp_tmp
+        lda tg_y
+        lsr zp_tmp
+        ror
+        lsr zp_tmp
+        ror
+        lsr zp_tmp
+        ror                     // cy
+        cmp #127
+        bcc !cy_ok+
+        lda #127
+!cy_ok: tax
+        lda tg_y
+        and #$07
+        sta tg_yb
+        lda tg_x + 1
+        sta zp_tmp
+        lda tg_x
+        lsr zp_tmp
+        ror
+        lsr zp_tmp
+        ror
+        lsr zp_tmp
+        ror                     // cx (0..127)
+        sta tg_cx
         txa
+        and #$01
+        sta rc_s
+        asl                     // a = cx + 4 - 2s
+        eor #$FF
         sec
-        sbc cam_cy
-        sta zp_row              // signed start row (can be negative!)
-
-        ldx zp_tmp
-        lda block_lo, x
-        sta zp_ptr
-        lda block_hi, x
-        sta zp_ptr + 1
-
-        lda #$00
-        sta zp_dx               // local block row 0..3
-!sb_r:
-        lda zp_row
+        adc tg_cx
         clc
-        adc zp_dx
-        bmi !sb_next_r+         // sr < 0 -> clip
-        cmp #21
-        bcs !sb_next_r+         // sr >= 21 -> clip
-        tay
-        lda full_row_lo, y
-        sta zp_dst
-        lda full_row_hi, y
-        clc
-        adc back_page
-        sta zp_dst + 1
-
-        lda #$00
-        sta zp_tmp              // local block col 0..3
-!sb_c:
-        lda zp_cx
-        clc
-        adc zp_tmp
-        bmi !sb_next_c+         // sc < 0 -> clip
-        cmp #40
-        bcs !sb_next_c+         // sc >= 40 -> clip
-        pha                     // save screen col
-        lda zp_dx
+        adc #$04
+        pha
+        and #$03
+        sta tg_q
         asl
         asl
-        clc
-        adc zp_tmp
+        asl
+        sta zp_tmp
+        lda tg_x
+        and #$07
+        ora zp_tmp
         tay
-        lda (zp_ptr), y
-        tax                     // char code
         pla
-        tay                     // screen col
-        txa
-        sta (zp_dst), y
-!sb_next_c:
-        inc zp_tmp
-        lda zp_tmp
-        cmp #$04
-        bcc !sb_c-
-
-!sb_next_r:
-        inc zp_dx
-        lda zp_dx
-        cmp #$04
-        bcc !sb_r-
+        lsr
+        lsr
+        sta rc_i                // i
+        lda tg_yb
+        cmp line_thr, y
+        bcs !lower+
+        // upper diamond U = iso_map[cy][i + (q >> 1)]
+        lda iso_row_lo, x
+        sta rc_pu
+        lda iso_row_hi, x
+        sta rc_pu + 1
+        lda tg_q
+        lsr
+        clc
+        adc rc_i
+        tay
+        lda (rc_pu), y
         rts
+!lower: // lower diamond L = iso_map[cy + 1][i + s]
+        lda iso_row_lo + 1, x
+        sta rc_pu
+        lda iso_row_hi + 1, x
+        sta rc_pu + 1
+        lda rc_i
+        clc
+        adc rc_s
+        tay
+        lda (rc_pu), y
+        rts
+// Pixel rows of a q-char that belong to U, by q*8 + x (0..7)
+line_thr:
+        .byte 8, 7, 7, 6, 6, 5, 5, 4
+        .byte 4, 3, 3, 2, 2, 1, 1, 0
+        .byte 0, 1, 1, 2, 2, 3, 3, 4
+        .byte 4, 5, 5, 6, 6, 7, 7, 8
 
 // ------------------------------------------------------------------------------
-// Cyclone Instrument HUD (Rows 22-24)
+// Cyclone Instrument HUD (screen rows 21-23, shown at raster lines 223-246)
 // ------------------------------------------------------------------------------
 draw_hud_frame:
         ldx #39
 !clr:
-        lda #$20                // Blank Row 21 gap above raster split
-        sta SCREEN + 21 * 40, x
-        sta SCREEN + $0400 + 21 * 40, x
-        lda #$06
-        sta COLRAM + 21 * 40, x
         lda #H_HLINE
-        sta SCREEN + 22 * 40, x
-        sta SCREEN + $0400 + 22 * 40, x
+        sta SCREEN + HUD_DIV * 40, x
+        sta SCREEN + $0400 + HUD_DIV * 40, x
         lda #$03                // Cyan divider
-        sta COLRAM + 22 * 40, x
+        sta COLRAM + HUD_DIV * 40, x
         lda #$20
-        sta SCREEN + 23 * 40, x
-        sta SCREEN + 24 * 40, x
+        sta SCREEN + HUD_ROW1 * 40, x
+        sta SCREEN + HUD_ROW2 * 40, x
         lda #$01                // White hires text
-        sta COLRAM + 23 * 40, x
-        sta COLRAM + 24 * 40, x
+        sta COLRAM + HUD_ROW1 * 40, x
+        sta COLRAM + HUD_ROW2 * 40, x
         dex
         bpl !clr-
 
-        // Static labels on Row 23 & 24 (mirrored to both screen pages)
+        // Static labels on HUD row 1 & 24 (mirrored to both screen pages)
         ldx #39
 !lbl:
         lda hud_r23, x
-        sta SCREEN + 23 * 40, x
-        sta SCREEN + $0400 + 23 * 40, x
+        sta SCREEN + HUD_ROW1 * 40, x
+        sta SCREEN + $0400 + HUD_ROW1 * 40, x
         lda hud_r24, x
-        sta SCREEN + 24 * 40, x
-        sta SCREEN + $0400 + 24 * 40, x
+        sta SCREEN + HUD_ROW2 * 40, x
+        sta SCREEN + $0400 + HUD_ROW2 * 40, x
         dex
         bpl !lbl-
 
         // Colorize FUEL label cyan, CRATES yellow, LIVES green
         ldx #$03
 !cf:    lda #$03
-        sta COLRAM + 23 * 40, x
+        sta COLRAM + HUD_ROW1 * 40, x
         dex
         bpl !cf-
         ldx #$05
 !cc:    lda #$07
-        sta COLRAM + 24 * 40, x
+        sta COLRAM + HUD_ROW2 * 40, x
         dex
         bpl !cc-
         rts
 
 update_hud:
-        // Fuel bar at Row 23 cols 5..12 (8 chars, each 8 units = 64 max)
+        // Fuel bar at HUD row 1 cols 5..12 (8 chars, each 8 units = 64 max)
         lda fuel
         sta zp_tmp
         ldx #$00
@@ -2569,7 +2910,7 @@ update_hud:
         cmp #$08
         bcc !f_part+
         lda #H_SOLID
-        sta SCREEN + 23 * 40 + 5, x
+        sta SCREEN + HUD_ROW1 * 40 + 5, x
         lda zp_tmp
         sec
         sbc #$08
@@ -2580,13 +2921,13 @@ update_hud:
         beq !f_empty+
         clc
         adc #(H_BAR1 - 1)
-        sta SCREEN + 23 * 40 + 5, x
+        sta SCREEN + HUD_ROW1 * 40 + 5, x
         lda #$00
         sta zp_tmp
         jmp !f_col+
 !f_empty:
         lda #$20
-        sta SCREEN + 23 * 40 + 5, x
+        sta SCREEN + HUD_ROW1 * 40 + 5, x
 !f_col:
         lda fuel
         cmp #16
@@ -2596,18 +2937,18 @@ update_hud:
 !f_red:
         lda #$02                // Red low fuel
 !f_scol:
-        sta COLRAM + 23 * 40 + 5, x
+        sta COLRAM + HUD_ROW1 * 40 + 5, x
         inx
         cpx #$08
         bcc !f_lp-
 
-        // Altitude at Row 23 col 18..19 (00..12)
+        // Altitude at HUD row 1 col 18..19 (00..12)
         lda heli_alt
         jsr byte_to_2dec
-        stx SCREEN + 23 * 40 + 18
-        sta SCREEN + 23 * 40 + 19
+        stx SCREEN + HUD_ROW1 * 40 + 18
+        sta SCREEN + HUD_ROW1 * 40 + 19
 
-        // Cyclone warning at Row 23 cols 22..30
+        // Cyclone warning at HUD row 1 cols 22..30
         ldx #$08
         lda torn_near
         beq !no_warn+
@@ -2616,32 +2957,32 @@ update_hud:
         beq !warn_txt+
 !no_warn:
         lda #$20
-!nw_lp: sta SCREEN + 23 * 40 + 22, x
+!nw_lp: sta SCREEN + HUD_ROW1 * 40 + 22, x
         dex
         bpl !nw_lp-
         jmp !hud_r24+
 !warn_txt:
         lda txt_cyclone, x
-        sta SCREEN + 23 * 40 + 22, x
+        sta SCREEN + HUD_ROW1 * 40 + 22, x
         lda #$02                // Red alert
-        sta COLRAM + 23 * 40 + 22, x
+        sta COLRAM + HUD_ROW1 * 40 + 22, x
         dex
         bpl !warn_txt-
 
 !hud_r24:
-        // Crates X/5 at Row 24 col 7
+        // Crates X/5 at HUD row 2 col 7
         lda crates_got
         clc
         adc #'0'
-        sta SCREEN + 24 * 40 + 7
+        sta SCREEN + HUD_ROW2 * 40 + 7
 
-        // Lives at Row 24 col 16
+        // Lives at HUD row 2 col 16
         lda lives
         clc
         adc #'0'
-        sta SCREEN + 24 * 40 + 16
+        sta SCREEN + HUD_ROW2 * 40 + 16
 
-        // Status message at Row 24 cols 18..28 (11 chars)
+        // Status message at HUD row 2 cols 18..28 (11 chars)
         lda msg_state
         asl
         asl
@@ -2651,29 +2992,29 @@ update_hud:
         ldy #$00
 !ms_lp:
         lda msg_table, x
-        sta SCREEN + 24 * 40 + 18, y
+        sta SCREEN + HUD_ROW2 * 40 + 18, y
         lda #$07
-        sta COLRAM + 24 * 40 + 18, y
+        sta COLRAM + HUD_ROW2 * 40 + 18, y
         inx
         iny
         cpy #11
         bcc !ms_lp-
 
-        // Score (4 hex-like/BCD digits) at Row 23 cols 36..39
+        // Score (4 hex-like/BCD digits) at HUD row 1 cols 36..39
         lda score_hi
         jsr byte_to_hex
-        stx SCREEN + 23 * 40 + 36
-        sta SCREEN + 23 * 40 + 37
+        stx SCREEN + HUD_ROW1 * 40 + 36
+        sta SCREEN + HUD_ROW1 * 40 + 37
         lda score_lo
         jsr byte_to_hex
-        stx SCREEN + 23 * 40 + 38
-        sta SCREEN + 23 * 40 + 39
+        stx SCREEN + HUD_ROW1 * 40 + 38
+        sta SCREEN + HUD_ROW1 * 40 + 39
 
         // Mirror dynamic HUD Rows 23-24 (80 bytes) to second screen page ($4400)
         ldx #79
 !hud_mir:
-        lda SCREEN + 23 * 40, x
-        sta SCREEN + $0400 + 23 * 40, x
+        lda SCREEN + HUD_ROW1 * 40, x
+        sta SCREEN + $0400 + HUD_ROW1 * 40, x
         dex
         bpl !hud_mir-
         rts
@@ -2741,42 +3082,34 @@ show_tactical_map:
         lda full_col_hi, x
         sta zp_col + 1
 
-        // Sample map row: ty = zp_row * 3 (0..63)
+        // Sample iso map row j = zp_row * 6 (0..126), diamond i = screen col
         lda zp_row
         asl
         clc
         adc zp_row
-        cmp #64
+        asl
+        cmp #127
         bcc !mr_ok+
-        lda #63
+        lda #126
 !mr_ok:
         tax
-        lda map_row_lo, x
+        lda iso_row_lo, x
+        clc
+        adc #$01                // skip the margin diamond
         sta zp_ptr
-        lda map_row_hi, x
+        lda iso_row_hi, x
+        adc #$00
         sta zp_ptr + 1
 
         ldy #31
 !mc_lp:
-        tya
-        asl
         sty zp_tmp              // save screen col 0..31
-        tay
         lda (zp_ptr), y
         tax
-        lda tile_flags, x
+        lda terrain_flags, x
         and #TF_BASE
         bne !m_base+
-        lda tile_flags, x
-        and #TF_LAND
-        bne !m_land+
-        iny
-        lda (zp_ptr), y
-        tax
-        lda tile_flags, x
-        and #TF_BASE
-        bne !m_base+
-        lda tile_flags, x
+        lda terrain_flags, x
         and #TF_LAND
         bne !m_land+
         ldy zp_tmp
@@ -3017,7 +3350,7 @@ show_tactical_map:
         sta $FFFF
         lda #$00
         sta irq_phase
-        lda #224
+        lda #HUD_SPLIT
         sta $D012
         lda #$01
         sta $D019
@@ -3253,6 +3586,7 @@ show_banner_win:
         ldx #19
 !bw:    lda txt_win, x
         sta SCREEN + 10 * 40 + 10, x
+        sta SCREEN + $0400 + 10 * 40 + 10, x
         lda #$05
         sta COLRAM + 10 * 40 + 10, x
         dex
@@ -3263,6 +3597,7 @@ show_banner_over:
         ldx #19
 !bo:    lda txt_over, x
         sta SCREEN + 10 * 40 + 10, x
+        sta SCREEN + $0400 + 10 * 40 + 10, x
         lda #$02
         sta COLRAM + 10 * 40 + 10, x
         dex
@@ -3298,6 +3633,8 @@ torn_spr_bit:   .byte $04, $20, $40     // $D010 / $D015 bits
 // Sprite register shadow ($D000-$D015): update_sprites writes here and the
 // raster IRQ copies it to the VIC together with the scroll registers.
 vic_sh:      .fill $16, 0
+shadow_dx:   .fill 16, min(4, floor((i + 1) / 3))   // by heli_alt 0..12 (+gust headroom)
+kla_idle_save: .byte 0
 
 crate_active: .byte 1, 1, 1, 1, 1
 crate_wx_lo:  .byte $50, $C0, $E0, $40, $40
@@ -3328,5 +3665,3 @@ col_row_hi:  .fill VIEW_TH, >(COLRAM + i * 80)
 full_row_lo: .fill 25, <(SCREEN + i * 40)
 full_row_hi: .fill 25, >(SCREEN + i * 40)
 full_col_hi: .fill 25, >(COLRAM + i * 40)
-map_row_lo:  .fill 64, <(map_tiles + i * 64)
-map_row_hi:  .fill 64, >(map_tiles + i * 64)

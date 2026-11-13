@@ -37,15 +37,22 @@ except ImportError:  # pragma: no cover
 
 from .agy_cli import (
     AGY_EFFORT_LEVELS,
+    AI_PROVIDERS,
     DEFAULT_AGY_MODELS,
+    DEFAULT_CLAUDE_MODELS,
     INSTALL_CMD_UNIX,
     INSTALL_CMD_WINDOWS_PS1,
     AgyCliConnector,
     AgyPromptResult,
     AgyStatus,
     ExtractedCodeBlock,
+    default_models_for_provider,
     extract_streaming_code_preview,
     infer_prompt_language,
+    install_commands_for_provider,
+    normalize_provider,
+    provider_display_name,
+    provider_short_tag,
 )
 from .client import C64UClient
 from .env import load_studio_settings, save_studio_settings
@@ -871,19 +878,33 @@ class KickAssUpdateModal:
 
 class AgySetupModal:
     """
-    Interactive C64 Studio Setup & Walkthrough Modal for Google Antigravity CLI (`agy`).
-    Auto-detects `agy`, provides copyable install commands OR 1-click auto-download/install,
+    Interactive C64 Studio Setup & Walkthrough Modal for AI CLIs (`agy` & `claude`).
+    Auto-detects both `agy` and `claude`, lets the user choose their active AI CLI,
+    provides copyable install commands OR 1-click auto-download/install,
     assists with first-run authentication, and links the `c64u-bridge` MCP server.
     """
 
-    def __init__(self, connector: AgyCliConnector, status: Optional[AgyStatus] = None):
+    def __init__(
+        self,
+        connector: AgyCliConnector,
+        status: Optional[AgyStatus] = None,
+        provider: Optional[str] = None,
+        all_statuses: Optional[dict[str, AgyStatus]] = None,
+    ):
         self.connector = connector
-        self.status = status or connector.detect_cli()
+        inferred_prov = provider or (getattr(status, "provider", None) if status is not None else None) or connector.provider
+        self.provider = normalize_provider(inferred_prov)
+        self.status = status or connector.detect_cli(provider=self.provider)
+        self.all_statuses: dict[str, AgyStatus] = dict(all_statuses or {})
+        self.all_statuses[self.provider] = self.status
 
     def _build_walkthrough_text(self) -> str:
         s = self.status
+        prov = self.provider
+        disp = provider_display_name(prov)
+        disp_upper = disp.upper()
         step1_state = (
-            f"✓ DETECTED: agy v{s.version or 'installed'} ({s.binary_path})"
+            f"✓ DETECTED: {prov} v{s.version or 'installed'} ({s.binary_path})"
             if s.installed
             else "✗ NOT DETECTED ON PATH OR STANDARD INSTALL FOLDERS"
         )
@@ -892,30 +913,53 @@ class AgySetupModal:
             if s.mcp_configured
             else "○ NOT YET LINKED (Click 'LINK C64U MCP' below for 1-click setup)"
         )
+        tag = provider_short_tag(prov)
+        if prov == "claude":
+            auth_guide = (
+                "  Guide   : On first run, `claude` opens an Anthropic sign-in prompt to authenticate.\n"
+                "            Click '🔑 AUTH TERMINAL' if you haven't signed in to `claude` yet."
+            )
+        else:
+            auth_guide = (
+                "  Guide   : On first run, `agy` opens a browser sign-in prompt to authenticate.\n"
+                "            Click '🔑 AUTH TERMINAL' if you haven't signed in to `agy` yet."
+            )
         lines = [
-            "STEP 1 — ANTIGRAVITY CLI (`agy`) AUTO-DETECTION & INSTALLATION",
+            f"STEP 1 — {disp_upper} (`{prov}`) AUTO-DETECTION & INSTALLATION",
             f"  Status  : {step1_state}",
             f"  Command : {s.install_command}",
         ]
         if not s.installed:
             lines.append(
-                "  Action  : Click '⬇ AUTO-INSTALL AGY CLI' to download & install automatically,\n"
+                f"  Action  : Click '⬇ AUTO-INSTALL {tag} CLI' to download & install automatically,\n"
                 "            or click '📋 COPY INSTALL CMD' to run it in your own terminal."
             )
         lines.extend(
             [
                 "────────────────────────────────────────────────────────────────────────────",
                 "STEP 2 — SIGN IN / AUTHENTICATE (FIRST RUN ONLY)",
-                "  Guide   : On first run, `agy` opens a browser sign-in prompt to authenticate.",
-                "            Click '🔑 AUTH TERMINAL' if you haven't signed in to `agy` yet.",
+                auth_guide,
                 "────────────────────────────────────────────────────────────────────────────",
                 "STEP 3 — CONNECT C64U HARDWARE BRIDGE MCP SERVER",
                 f"  Status  : {step3_state}",
-                "  Guide   : Linking `c64u-bridge` lets Antigravity compile ASM/C/Python, push",
+                f"  Guide   : Linking `c64u-bridge` lets {disp} compile ASM/C/Python, push",
                 "            via DMA to your C64U, and inspect Screen RAM automatically!",
             ]
         )
         return "\n".join(lines)
+
+    def _format_provider_summary(self) -> str:
+        parts = []
+        for pid, _plabel in AI_PROVIDERS:
+            st = self.all_statuses.get(pid)
+            if st is None:
+                parts.append(f"{pid}: ?")
+            elif st.installed:
+                ver = f"v{st.version}" if st.version else "ready"
+                parts.append(f"{pid}: ✓ {ver}")
+            else:
+                parts.append(f"{pid}: ✗ not found")
+        return "  |  ".join(parts)
 
     def show_tk(self, parent: "C64StudioApp", callback: Optional[Callable[[AgyStatus], None]] = None) -> tk.Toplevel:
         t = THEMES[parent.current_theme]
@@ -923,19 +967,21 @@ class AgySetupModal:
         dlg = tk.Toplevel(parent.root)
         self.dlg = dlg
         parent._apply_application_icon(dlg)
-        dlg.title("C64 STUDIO // ANTIGRAVITY CLI (AGY) SETUP & OPTIONS")
-        dlg.geometry("920x590")
+        dlg.title("C64 STUDIO // AI CLI SETUP & PROVIDER SELECTOR (AGY & CLAUDE)")
+        dlg.geometry("940x650")
         border_col = str(t["success"]) if self.status.installed else str(t["warning"])
         dlg.configure(bg=str(t["paper"]), highlightthickness=6, highlightbackground=border_col)
         dlg.transient(parent.root)
 
+        def _header_text() -> str:
+            disp_upper = provider_display_name(self.provider).upper()
+            if self.status.installed:
+                return f"[ ✓ {disp_upper} (`{self.provider}`) CONNECTED — SETUP & MCP WIZARD ]"
+            return f"[ ! {disp_upper} (`{self.provider}`) SETUP WALKTHROUGH ! ]"
+
         hdr_lbl = tk.Label(
             dlg,
-            text=(
-                "[ ✓ GOOGLE ANTIGRAVITY CLI (`agy`) CONNECTED — SETUP & MCP WIZARD ]"
-                if self.status.installed
-                else "[ ! GOOGLE ANTIGRAVITY CLI (`agy`) SETUP WALKTHROUGH ! ]"
-            ),
+            text=_header_text(),
             font=(font_fam, 10, "bold"),
             bg=str(t["panel_bg"]),
             fg=str(t["success"]) if self.status.installed else str(t["warning"]),
@@ -943,6 +989,40 @@ class AgySetupModal:
         )
         hdr_lbl.pack(fill=tk.X, padx=14, pady=(12, 6))
         self.hdr_lbl = hdr_lbl
+
+        # Provider Selector Card (Antigravity `agy` vs Claude Code `claude`)
+        prov_card = tk.Frame(
+            dlg,
+            bg=str(t["panel_bg"]),
+            highlightthickness=1,
+            highlightbackground=str(t["accent"]),
+            padx=12,
+            pady=6,
+        )
+        prov_card.pack(fill=tk.X, padx=14, pady=(0, 6))
+
+        tk.Label(
+            prov_card,
+            text="ACTIVE AI CLI:",
+            font=(font_fam, 8, "bold"),
+            bg=str(t["panel_bg"]),
+            fg=str(t["accent_bright"]),
+        ).pack(side=tk.LEFT, padx=(0, 8))
+
+        modal_provider_var = tk.StringVar(master=dlg, value=self.provider)
+        self.modal_provider_var = modal_provider_var
+        provider_btns: dict[str, tk.Radiobutton] = {}
+
+        provider_summary_lbl = tk.Label(
+            prov_card,
+            text=self._format_provider_summary(),
+            font=(font_fam, 8, "bold"),
+            bg=str(t["panel_bg"]),
+            fg=str(t["cyan"]),
+            anchor="e",
+        )
+        provider_summary_lbl.pack(side=tk.RIGHT)
+        self.provider_summary_lbl = provider_summary_lbl
 
         info_lbl = tk.Label(
             dlg,
@@ -1001,11 +1081,10 @@ class AgySetupModal:
             fg=str(t["accent"]),
         ).pack(side=tk.LEFT, padx=(0, 6))
 
-        models_list = list(self.status.models or DEFAULT_AGY_MODELS)
+        models_list = list(self.status.models or default_models_for_provider(self.provider))
         cur_model = parent.agy_model_var.get().strip()
         if cur_model and all(mid != cur_model for mid, _ in models_list):
             models_list.append((cur_model, cur_model))
-        model_ids = [mid for mid, _ in models_list]
         model_display = {mid: (f"{lbl} [{mid}]" if mid else lbl) for mid, lbl in models_list}
         modal_model_var = tk.StringVar(
             master=dlg,
@@ -1027,7 +1106,7 @@ class AgySetupModal:
         model_menu = tk.OptionMenu(
             opts_row,
             modal_model_var,
-            *[model_display[mid] for mid in model_ids],
+            *[model_display[mid] for mid, _ in models_list],
             command=_on_modal_model_pick,
         )
         model_menu.config(
@@ -1043,6 +1122,26 @@ class AgySetupModal:
         model_menu.pack(side=tk.LEFT, padx=(0, 14))
         self.model_menu = model_menu
         self.modal_model_var = modal_model_var
+
+        def _rebuild_modal_models(new_models: list[tuple[str, str]]) -> None:
+            nonlocal models_list, model_display
+            models_list = list(new_models or default_models_for_provider(self.provider))
+            c_mod = parent.agy_model_var.get().strip()
+            if c_mod and all(mid != c_mod for mid, _ in models_list):
+                models_list.append((c_mod, c_mod))
+            model_display = {mid: (f"{lbl} [{mid}]" if mid else lbl) for mid, lbl in models_list}
+            m_menu = model_menu["menu"]
+            m_menu.delete(0, tk.END)
+            for mid, _ in models_list:
+                disp = model_display[mid]
+                m_menu.add_command(
+                    label=disp,
+                    command=lambda d=disp: (
+                        modal_model_var.set(d),
+                        _on_modal_model_pick(d),
+                    ),
+                )
+            modal_model_var.set(model_display.get(c_mod, c_mod or "Default CLI Model"))
 
         tk.Label(
             opts_row,
@@ -1077,56 +1176,100 @@ class AgySetupModal:
         effort_menu.pack(side=tk.LEFT)
         self.effort_menu = effort_menu
 
-        def _refresh_ui(msg: Optional[str] = None) -> None:
-            self.status = self.connector.detect_cli()
+        def _refresh_ui(msg: Optional[str] = None, detect_all: bool = False) -> None:
+            if detect_all:
+                self.all_statuses = self.connector.detect_all_clis()
+                self.status = self.all_statuses[self.provider]
+            else:
+                self.status = self.connector.detect_cli(provider=self.provider)
+                self.all_statuses[self.provider] = self.status
+            if hasattr(parent, "cli_statuses"):
+                parent.cli_statuses.update(self.all_statuses)
             parent._refresh_agy_badge(self.status)
             if not dlg.winfo_exists():
                 return
+            tag = provider_short_tag(self.provider)
             dlg.configure(
                 highlightbackground=str(t["success"]) if self.status.installed else str(t["warning"])
             )
             hdr_lbl.configure(
-                text=(
-                    "[ ✓ GOOGLE ANTIGRAVITY CLI (`agy`) CONNECTED — SETUP & MCP WIZARD ]"
-                    if self.status.installed
-                    else "[ ! GOOGLE ANTIGRAVITY CLI (`agy`) SETUP WALKTHROUGH ! ]"
-                ),
+                text=_header_text(),
                 fg=str(t["success"]) if self.status.installed else str(t["warning"]),
             )
+            provider_summary_lbl.configure(text=self._format_provider_summary())
             info_lbl.configure(text=self._build_walkthrough_text())
             status_bar.configure(text=msg or self.status.status_message)
             btn_install.configure(
-                text="↻ UPDATE AGY CLI" if self.status.installed else "⬇ AUTO-INSTALL AGY CLI"
+                text=f"↻ UPDATE {tag} CLI" if self.status.installed else f"⬇ AUTO-INSTALL {tag} CLI"
             )
+            _rebuild_modal_models(self.status.models)
+
+        def _on_provider_select() -> None:
+            chosen_prov = normalize_provider(modal_provider_var.get())
+            self.provider = chosen_prov
+            if hasattr(parent, "set_ai_provider"):
+                parent.set_ai_provider(chosen_prov, detect=False)
+            else:
+                self.connector.provider = chosen_prov
+            if chosen_prov in self.all_statuses:
+                self.status = self.all_statuses[chosen_prov]
+            else:
+                self.status = self.connector.detect_cli(provider=chosen_prov)
+                self.all_statuses[chosen_prov] = self.status
+            _refresh_ui(detect_all=False)
+            parent.notify(f"ACTIVE AI CLI: {provider_display_name(chosen_prov).upper()}")
+
+        for pid, plabel in AI_PROVIDERS:
+            rb = tk.Radiobutton(
+                prov_card,
+                text=plabel,
+                variable=modal_provider_var,
+                value=pid,
+                command=_on_provider_select,
+                font=(font_fam, 8, "bold"),
+                bg=str(t["panel_bg"]),
+                fg=str(t["accent_bright"]),
+                selectcolor=str(t["editor_bg"]),
+                activebackground=str(t["panel_bg"]),
+                activeforeground=str(t["cyan"]),
+                indicatoron=True,
+                cursor="hand2",
+            )
+            rb.pack(side=tk.LEFT, padx=(0, 12))
+            provider_btns[pid] = rb
+        self.provider_buttons = provider_btns
 
         def do_redetect() -> None:
-            _refresh_ui()
+            _refresh_ui(detect_all=True)
+            tag = provider_short_tag(self.provider)
             parent.notify(
-                f"AGY CLI {'DETECTED v' + (self.status.version or '') if self.status.installed else 'NOT FOUND'}"
+                f"{tag} CLI {'DETECTED v' + (self.status.version or '') if self.status.installed else 'NOT FOUND'}"
             )
 
         def do_copy_cmd() -> None:
             dlg.clipboard_clear()
             dlg.clipboard_append(self.status.install_command)
             status_bar.configure(text=f"✓ Copied install command to clipboard: {self.status.install_command}")
-            parent.notify("COPIED AGY INSTALL COMMAND TO CLIPBOARD")
+            parent.notify(f"COPIED {provider_short_tag(self.provider)} INSTALL COMMAND TO CLIPBOARD")
 
         def do_install_or_update() -> None:
             btn_install.configure(state=tk.DISABLED, text="⏳ WORKING...")
-            status_bar.configure(text="Running official Antigravity CLI installer/updater... please wait.")
+            disp = provider_display_name(self.provider)
+            status_bar.configure(text=f"Running official {disp} installer/updater... please wait.")
 
             def _worker() -> None:
                 if self.status.installed:
-                    ok, msg = self.connector.update_cli()
+                    ok, msg = self.connector.update_cli(provider=self.provider)
                 else:
                     ok, msg = self.connector.install_cli(
                         progress_callback=lambda m: parent.root.after(
                             0, lambda line=m: status_bar.configure(text=line) if dlg.winfo_exists() else None
-                        )
+                        ),
+                        provider=self.provider,
                     )
 
                 def _done() -> None:
-                    parent._write_log(f"{'✓' if ok else '✗'} Antigravity CLI: {msg}")
+                    parent._write_log(f"{'✓' if ok else '✗'} {disp}: {msg}")
                     parent.notify(msg[:56].upper(), severity="information" if ok else "error")
                     if dlg.winfo_exists():
                         btn_install.configure(state=tk.NORMAL)
@@ -1143,7 +1286,7 @@ class AgySetupModal:
                 _worker()
 
         def do_auth_terminal() -> None:
-            ok, msg = self.connector.launch_interactive_terminal()
+            ok, msg = self.connector.launch_interactive_terminal(provider=self.provider)
             status_bar.configure(text=msg)
             parent._write_log(f"{'✓' if ok else 'ℹ'} {msg}")
 
@@ -1151,6 +1294,7 @@ class AgySetupModal:
             ok, msg = self.connector.register_c64u_mcp(
                 host=parent.client.host,
                 port=parent.client.port,
+                provider=self.provider,
             )
             parent._write_log(f"{'✓' if ok else '✗'} {msg}")
             _refresh_ui(msg)
@@ -1164,9 +1308,10 @@ class AgySetupModal:
         btn_row = tk.Frame(dlg, bg=str(t["paper"]))
         btn_row.pack(fill=tk.X, padx=14, pady=(2, 12))
 
+        init_tag = provider_short_tag(self.provider)
         btn_install = tk.Button(
             btn_row,
-            text="↻ UPDATE AGY CLI" if self.status.installed else "⬇ AUTO-INSTALL AGY CLI",
+            text=f"↻ UPDATE {init_tag} CLI" if self.status.installed else f"⬇ AUTO-INSTALL {init_tag} CLI",
             command=do_install_or_update,
             font=(font_fam, 8, "bold"),
             bg=str(t["success"]),
@@ -1727,11 +1872,15 @@ class CompileErrorFixModal:
         )
         self.hdr_lbl.pack(fill=tk.X, padx=14, pady=(14, 6))
 
+        prov = parent._active_provider() if hasattr(parent, "_active_provider") else "agy"
+        disp_upper = provider_display_name(prov).upper()
+        prov_brand = "CLAUDE" if prov == "claude" else "ANTIGRAVITY"
+
         self.prompt_lbl = tk.Label(
             dlg,
             text=(
                 "COMPILATION DID NOT SUCCEED.\n"
-                "WOULD YOU LIKE TO SEND THIS ISSUE TO ANTIGRAVITY CLI (`agy`) TO BE AUTO-FIXED,\n"
+                f"WOULD YOU LIKE TO SEND THIS ISSUE TO {disp_upper} (`{prov}`) TO BE AUTO-FIXED,\n"
                 "OR RETURN TO THE IDE CODE EDITOR TO FIX IT YOURSELF?"
             ),
             font=(font_fam, 8, "bold"),
@@ -1787,7 +1936,7 @@ class CompileErrorFixModal:
 
         self.autofix_btn = tk.Button(
             btn_row,
-            text="▶ YES — AUTO-FIX WITH ANTIGRAVITY [ENTER]",
+            text=f"▶ YES — AUTO-FIX WITH {prov_brand} [ENTER]",
             command=choose_autofix,
             font=(font_fam, 9, "bold"),
             bg=str(t["success"]),
@@ -2050,9 +2199,12 @@ class GameAssetGenModal:
         btn_row = tk.Frame(dlg, bg=str(t["paper"]))
         btn_row.pack(fill=tk.X, padx=14, pady=(4, 14))
 
+        prov = parent._active_provider() if hasattr(parent, "_active_provider") else "agy"
+        prov_brand = "CLAUDE" if prov == "claude" else "ANTIGRAVITY"
+
         self.generate_btn = tk.Button(
             btn_row,
-            text="▶ GENERATE IN IDE WITH ANTIGRAVITY [ENTER]",
+            text=f"▶ GENERATE IN IDE WITH {prov_brand} [ENTER]",
             command=do_generate,
             font=(font_fam, 9, "bold"),
             bg=str(t["success"]),
@@ -2589,13 +2741,29 @@ class C64StudioApp:
             port=int(kwargs.get("port", 80)),
             password=kwargs.get("password"),
         )
+        self._studio_settings = load_studio_settings()
+        self._loading_studio_settings = True
+        explicit_provider = kwargs.get("ai_provider") or self._studio_settings.get("ai_provider")
+        self._provider_explicitly_chosen = bool(explicit_provider)
+        initial_provider = normalize_provider(explicit_provider)
+        init_install_cmd, init_install_alt = install_commands_for_provider(initial_provider)
+
         self.validator = DeploymentValidator()
-        self.agy = AgyCliConnector(agy_bin=kwargs.get("agy_bin"), workspace_dir=Path.cwd())
+        self.agy = AgyCliConnector(
+            agy_bin=kwargs.get("agy_bin"),
+            claude_bin=kwargs.get("claude_bin"),
+            workspace_dir=Path.cwd(),
+            provider=initial_provider,
+        )
         self.agy_status: AgyStatus = AgyStatus(
             installed=False,
-            install_command=INSTALL_CMD_WINDOWS_PS1 if os.name == "nt" else INSTALL_CMD_UNIX,
-            status_message="Checking Antigravity CLI...",
+            models=default_models_for_provider(initial_provider),
+            install_command=init_install_cmd,
+            install_command_alt=init_install_alt,
+            status_message=f"Checking {provider_display_name(initial_provider)}...",
+            provider=initial_provider,
         )
+        self.cli_statuses: dict[str, AgyStatus] = {}
         self.last_validation_report: Optional[DeploymentValidationReport] = None
         self.last_agy_result: Optional[AgyPromptResult] = None
         self.last_agy_code_block: Optional[ExtractedCodeBlock] = None
@@ -2622,8 +2790,6 @@ class C64StudioApp:
         self.file_tab_close_buttons: dict[str, tk.Button] = {}
 
         self.current_theme = "Commodore 64"
-        self._studio_settings = load_studio_settings()
-        self._loading_studio_settings = True
         self.build_format_var = tk.StringVar(master=self.root, value="prg")
         self._suppress_auto_package: bool = False
         self.last_asm: str = ""
@@ -3645,6 +3811,23 @@ class C64StudioApp:
         self.agy_top_row1 = tk.Frame(self.agy_top_bar)
         self.agy_top_row1.pack(fill=tk.X, pady=(0, 4))
 
+        self.agy_lbl_provider = tk.Label(self.agy_top_row1, text="CLI:")
+        self.agy_lbl_provider.pack(side=tk.LEFT, padx=(0, 4))
+
+        self.agy_provider_var = tk.StringVar(master=self.root, value=self.agy.provider)
+        self.agy_provider_display_var = tk.StringVar(
+            master=self.root,
+            value=dict(AI_PROVIDERS).get(self.agy.provider, "Antigravity (agy)"),
+        )
+        self.agy_provider_menu = tk.OptionMenu(
+            self.agy_top_row1,
+            self.agy_provider_display_var,
+            *[plabel for _, plabel in AI_PROVIDERS],
+            command=lambda chosen_label: self._on_provider_menu_pick(chosen_label),
+        )
+        self.agy_provider_menu.config(relief=tk.FLAT, highlightthickness=1, padx=6, pady=2)
+        self.agy_provider_menu.pack(side=tk.LEFT, padx=(0, 10))
+
         self.agy_lbl_lang = tk.Label(self.agy_top_row1, text="TARGET:")
         self.agy_lbl_lang.pack(side=tk.LEFT, padx=(0, 4))
 
@@ -3680,7 +3863,7 @@ class C64StudioApp:
 
         self.btn_agy_setup_tab = tk.Button(
             self.agy_top_row1,
-            text="AGY SETUP",
+            text="CLI SETUP",
             command=self.action_open_agy_setup,
             relief=tk.FLAT,
             padx=8,
@@ -3717,10 +3900,11 @@ class C64StudioApp:
         self.agy_lbl_model = tk.Label(self.agy_top_row2, text="MODEL:")
         self.agy_lbl_model.pack(side=tk.LEFT, padx=(0, 4))
 
-        saved_model = str(self._studio_settings.get("agy_model", "")).strip()
+        model_key = "claude_model" if self.agy.provider == "claude" else "agy_model"
+        saved_model = str(self._studio_settings.get(model_key, self._studio_settings.get("agy_model", ""))).strip()
         self.agy_model_var = tk.StringVar(master=self.root, value=saved_model)
         self.agy_model_display_var = tk.StringVar(master=self.root, value="")
-        self._agy_model_choices: list[tuple[str, str]] = list(DEFAULT_AGY_MODELS)
+        self._agy_model_choices: list[tuple[str, str]] = default_models_for_provider(self.agy.provider)
         if saved_model and all(mid != saved_model for mid, _ in self._agy_model_choices):
             self._agy_model_choices.append((saved_model, saved_model))
         self.agy_model_menu = tk.OptionMenu(
@@ -4466,10 +4650,22 @@ class C64StudioApp:
             else:
                 b.configure(font=f_btn, bg=str(t["button_bg"]), fg=str(t["button_fg"]))
 
-        # Style Antigravity AI Console & Quick Prompt Bar
-        for lbl in (self.agy_lbl_lang, self.agy_lbl_mode, self.agy_lbl_effort, self.agy_lbl_model):
+        # Style AI Console & Quick Prompt Bar
+        for lbl in (
+            self.agy_lbl_provider,
+            self.agy_lbl_lang,
+            self.agy_lbl_mode,
+            self.agy_lbl_effort,
+            self.agy_lbl_model,
+        ):
             lbl.configure(font=f_small, bg=str(t["panel_bg"]), fg=str(t["accent"]))
-        for om in (self.agy_lang_menu, self.agy_mode_menu, self.agy_effort_menu, self.agy_model_menu):
+        for om in (
+            self.agy_provider_menu,
+            self.agy_lang_menu,
+            self.agy_mode_menu,
+            self.agy_effort_menu,
+            self.agy_model_menu,
+        ):
             om.configure(
                 font=f_small,
                 bg=str(t["button_bg"]),
@@ -8093,15 +8289,73 @@ class C64StudioApp:
         self.notify("OPENED VIC-II SPRITE STUDIO IN BROWSER")
 
     # -----------------------------------------------------------------------
-    # Google Antigravity CLI (`agy`) Auto-Detection, Setup & Prompting
+    # AI CLI (`agy` & `claude`) Auto-Detection, Setup & Prompting
     # -----------------------------------------------------------------------
 
+    def _active_provider(self) -> str:
+        if hasattr(self, "agy_provider_var"):
+            return normalize_provider(self.agy_provider_var.get())
+        return normalize_provider(getattr(self.agy, "provider", "agy"))
+
+    def _on_provider_menu_pick(self, chosen_label: str) -> None:
+        chosen_id = "agy"
+        for pid, plabel in AI_PROVIDERS:
+            if plabel == chosen_label:
+                chosen_id = pid
+                break
+        self.set_ai_provider(chosen_id, detect=True)
+
+    def set_ai_provider(
+        self,
+        provider: str,
+        *,
+        detect: bool = True,
+        persist: bool = True,
+    ) -> None:
+        """Switch active AI CLI provider between 'agy' (Antigravity) and 'claude' (Claude Code)."""
+        prov = normalize_provider(provider)
+        self.agy.provider = prov
+        if hasattr(self, "agy_provider_var") and self.agy_provider_var.get() != prov:
+            self.agy_provider_var.set(prov)
+        if hasattr(self, "agy_provider_display_var"):
+            self.agy_provider_display_var.set(dict(AI_PROVIDERS).get(prov, "Antigravity (agy)"))
+        if persist:
+            self._provider_explicitly_chosen = True
+            save_studio_settings({"ai_provider": prov})
+
+        # Load per-provider saved model if available
+        if hasattr(self, "agy_model_var"):
+            model_key = "claude_model" if prov == "claude" else "agy_model"
+            saved_m = str(self._studio_settings.get(model_key, "")).strip()
+            self._loading_studio_settings = True
+            try:
+                self.agy_model_var.set(saved_m)
+            finally:
+                self._loading_studio_settings = False
+
+        if detect:
+            st = self.agy.detect_cli(provider=prov)
+            self.cli_statuses[prov] = st
+        else:
+            st = self.cli_statuses.get(prov) or AgyStatus(
+                installed=False,
+                models=default_models_for_provider(prov),
+                install_command=install_commands_for_provider(prov)[0],
+                install_command_alt=install_commands_for_provider(prov)[1],
+                status_message=f"{provider_display_name(prov)} ({prov}) status pending.",
+                provider=prov,
+            )
+        self._refresh_agy_badge(st)
+        self._refresh_agy_model_menu(st.models or default_models_for_provider(prov))
+
     def _refresh_agy_badge(self, status: Optional[AgyStatus] = None) -> None:
-        """Update the top-bar Antigravity CLI status indicator pill."""
+        """Update the top-bar AI CLI status indicator pill and send button label."""
         if status is not None:
             self.agy_status = status
         if not self.root.winfo_exists():
             return
+        prov = normalize_provider(getattr(self.agy_status, "provider", None) or self._active_provider())
+        tag = provider_short_tag(prov)
         t = THEMES[self.current_theme]
         f_btn = (str(t["font_family"]), 8, "bold")
         if self.agy_status.installed:
@@ -8111,30 +8365,49 @@ class C64StudioApp:
             else:
                 ver_tag = "READY"
             self.btn_agy_status.configure(
-                text=f"● AGY {ver_tag}",
+                text=f"● {tag} {ver_tag}",
                 font=f_btn,
                 bg=str(t["success"]),
                 fg="#000000",
             )
         else:
             self.btn_agy_status.configure(
-                text="! AGY SETUP",
+                text=f"! {tag} SETUP",
                 font=f_btn,
                 bg=str(t["warning"]),
                 fg="#000000",
             )
+        if not getattr(self, "_agy_busy", False) and hasattr(self, "btn_agy_send"):
+            self.btn_agy_send.configure(text=f"▶ ASK {tag}")
+        if hasattr(self, "btn_agy_setup_tab"):
+            self.btn_agy_setup_tab.configure(text=f"{tag} SETUP")
+        if hasattr(self, "btn_agy_term"):
+            self.btn_agy_term.configure(text=f"▶ {tag} TERM")
+        if hasattr(self, "menu_buttons"):
+            if "btn-agy-setup" in self.menu_buttons:
+                self.menu_buttons["btn-agy-setup"].configure(text=f"{tag} CLI SETUP [^K]")
+            if "btn-agy-prompt" in self.menu_buttons:
+                prompt_pad = " " if tag == "CLAUDE" else "  "
+                self.menu_buttons["btn-agy-prompt"].configure(text=f"PROMPT {tag}{prompt_pad}[⇧F12]")
+        if hasattr(self, "tab_buttons") and "tab-agy" in self.tab_buttons:
+            self.tab_buttons["tab-agy"].configure(text=f"5:{tag} AI")
 
     def _on_agy_cli_option_changed(self, *_args) -> None:
         if getattr(self, "_loading_studio_settings", False):
             return
+        prov = self._active_provider()
         model_id = self.agy_model_var.get().strip() if hasattr(self, "agy_model_var") else ""
         effort = self.agy_effort_var.get().strip() if hasattr(self, "agy_effort_var") else "medium"
-        save_studio_settings({"agy_model": model_id, "agy_effort": effort})
+        model_key = "claude_model" if prov == "claude" else "agy_model"
+        self._studio_settings[model_key] = model_id
+        self._studio_settings["agy_effort"] = effort
+        save_studio_settings({model_key: model_id, "agy_effort": effort, "ai_provider": prov})
 
     def _refresh_agy_model_menu(self, models: Optional[list[tuple[str, str]]] = None) -> None:
         if not hasattr(self, "agy_model_menu"):
             return
-        choices = list(models or getattr(self, "_agy_model_choices", None) or DEFAULT_AGY_MODELS)
+        prov = self._active_provider()
+        choices = list(models or getattr(self, "_agy_model_choices", None) or default_models_for_provider(prov))
         cur_id = self.agy_model_var.get().strip()
         if cur_id and all(mid != cur_id for mid, _ in choices):
             choices.append((cur_id, cur_id))
@@ -8157,22 +8430,42 @@ class C64StudioApp:
         self.agy_model_display_var.set(cur_label)
 
     def check_agy_cli_startup(self, full: bool = False) -> None:
-        """Auto-detect `agy` CLI installation on C64 Studio startup."""
+        """Auto-detect both `agy` and `claude` CLI installations on C64 Studio startup."""
         if getattr(self, "_in_mainloop", False):
             def _bg() -> None:
-                st = self.agy.detect_cli(fetch_models=True)
+                all_sts = self.agy.detect_all_clis(fetch_models=True)
 
                 def _apply() -> None:
                     if not self.root.winfo_exists():
                         return
+                    self.cli_statuses.update(all_sts)
+                    active_prov = self._active_provider()
+                    if (
+                        not getattr(self, "_provider_explicitly_chosen", False)
+                        and not all_sts[active_prov].installed
+                    ):
+                        for alt_prov, alt_st in all_sts.items():
+                            if alt_st.installed:
+                                active_prov = alt_prov
+                                self.set_ai_provider(alt_prov, detect=False, persist=False)
+                                break
+
+                    st = all_sts[active_prov]
                     self._refresh_agy_badge(st)
                     if st.models:
                         self._refresh_agy_model_menu(st.models)
-                    if st.installed:
-                        self._write_log(f"✓ {st.status_message}")
+
+                    installed_list = [s for s in all_sts.values() if s.installed]
+                    if installed_list:
+                        for s in installed_list:
+                            self._write_log(f"✓ {s.status_message}")
+                        if len(installed_list) > 1:
+                            self._write_log(
+                                f"ℹ Multiple AI CLIs detected (active: {provider_display_name(active_prov)}). Switch anytime in 5:AI or CLI SETUP (^K)."
+                            )
                     else:
                         self._write_log(
-                            f"ℹ {st.status_message} Click '! AGY SETUP' (Ctrl+K) to install or copy `{st.install_command}`."
+                            f"ℹ Neither Antigravity (`agy`) nor Claude Code (`claude`) CLI detected. Click '! {provider_short_tag(active_prov)} SETUP' (Ctrl+K) to install."
                         )
 
                 try:
@@ -8183,39 +8476,74 @@ class C64StudioApp:
             threading.Thread(target=_bg, daemon=True).start()
             return
 
+        active_prov = self._active_provider()
         if full:
-            st = self.agy.detect_cli()
+            st = self.agy.detect_cli(provider=active_prov)
+            other_prov = "claude" if active_prov == "agy" else "agy"
+            other_st = self.agy.detect_cli(provider=other_prov)
+            self.cli_statuses[active_prov] = st
+            self.cli_statuses[other_prov] = other_st
         else:
-            bin_path = self.agy.find_binary()
-            is_win = os.name == "nt"
-            st = AgyStatus(
-                installed=bin_path is not None,
-                binary_path=bin_path,
-                version="detected" if bin_path is not None else None,
-                install_command=INSTALL_CMD_WINDOWS_PS1 if is_win else INSTALL_CMD_UNIX,
-                status_message=(
-                    f"Antigravity CLI detected at {bin_path}"
-                    if bin_path
-                    else "Antigravity CLI (agy) not detected on this system."
-                ),
-            )
+            def _quick_status(prov_id: str) -> AgyStatus:
+                b_path = self.agy.find_binary() if prov_id == "agy" else self.agy.find_binary(provider=prov_id)
+                cmd_1, cmd_2 = install_commands_for_provider(prov_id)
+                d_name = provider_display_name(prov_id)
+                return AgyStatus(
+                    installed=b_path is not None,
+                    binary_path=b_path,
+                    version="detected" if b_path is not None else None,
+                    models=default_models_for_provider(prov_id),
+                    install_command=cmd_1,
+                    install_command_alt=cmd_2,
+                    status_message=(
+                        f"{d_name} detected at {b_path}"
+                        if b_path
+                        else f"{d_name} ({prov_id}) not detected on this system."
+                    ),
+                    provider=prov_id,
+                )
+
+            st = _quick_status(active_prov)
+            other_prov = "claude" if active_prov == "agy" else "agy"
+            other_st = _quick_status(other_prov)
+            self.cli_statuses[active_prov] = st
+            self.cli_statuses[other_prov] = other_st
+            if not getattr(self, "_provider_explicitly_chosen", False) and not st.installed and other_st.installed:
+                self.set_ai_provider(other_prov, detect=False, persist=False)
+                st = other_st
+
         self._refresh_agy_badge(st)
 
     def action_open_agy_setup(self) -> None:
-        """Open the guided Antigravity CLI (`agy`) setup, options, and MCP linking modal."""
-        st = self.agy.detect_cli(fetch_models=getattr(self, "_in_mainloop", False))
+        """Open the guided AI CLI (`agy` & `claude`) setup, provider selector, and MCP linking modal."""
+        active_prov = self._active_provider()
+        fetch = getattr(self, "_in_mainloop", False)
+        st = self.agy.detect_cli(fetch_models=fetch, provider=active_prov)
+        other_prov = "claude" if active_prov == "agy" else "agy"
+        other_st = self.agy.detect_cli(fetch_models=False, provider=other_prov)
+        self.cli_statuses[active_prov] = st
+        self.cli_statuses[other_prov] = other_st
+
         self._refresh_agy_badge(st)
         if st.models:
             self._refresh_agy_model_menu(st.models)
-        modal = AgySetupModal(self.agy, st)
+        modal = AgySetupModal(
+            self.agy,
+            st,
+            provider=active_prov,
+            all_statuses=self.cli_statuses,
+        )
         self._last_agy_modal = modal
         modal.show_tk(self, callback=lambda updated: self._refresh_agy_badge(updated))
 
     def action_launch_agy_terminal(self) -> None:
-        """Open an interactive `agy` terminal window rooted in the workspace with live C64 Studio sync."""
+        """Open an interactive AI CLI terminal window rooted in the workspace with live C64 Studio sync."""
+        prov = self._active_provider()
+        tag = provider_short_tag(prov)
         ok, msg = self.agy.launch_interactive_terminal(
             model=self.agy_model_var.get().strip(),
             effort=self.agy_effort_var.get().strip(),
+            provider=prov,
         )
         self._write_log(f"{'✓' if ok else 'ℹ'} {msg}")
         self._write_agy_chat(
@@ -8223,7 +8551,7 @@ class C64StudioApp:
             "  • Any .asm / .c / .py / .sid files generated or MCP builds run in that CLI terminal "
             "automatically appear live in C64 Studio while 'LIVE CLI SYNC' is checked."
         )
-        self.notify("LAUNCHED INTERACTIVE AGY CLI TERMINAL" if ok else msg[:48].upper())
+        self.notify(f"LAUNCHED INTERACTIVE {tag} CLI TERMINAL" if ok else msg[:48].upper())
 
     def action_focus_agy_prompt(self) -> None:
         """Keep the main editor visible and focus the bottom Antigravity CLI prompt bar (`Shift+F12`)."""
@@ -8304,9 +8632,13 @@ class C64StudioApp:
         prompt_override: Optional[str] = None,
         force_language: Optional[str] = None,
     ) -> None:
-        """Send a prompt from C64 Studio to the Antigravity CLI (`agy`) with live tab-safe streaming."""
+        """Send a prompt from C64 Studio to the active AI CLI (`agy` or `claude`) with live tab-safe streaming."""
+        prov = self._active_provider()
+        disp_name = provider_display_name(prov)
+        tag = provider_short_tag(prov)
+
         if self._agy_busy:
-            self.notify("ANTIGRAVITY CLI IS CURRENTLY GENERATING...", severity="warning")
+            self.notify(f"{disp_name.upper()} IS CURRENTLY GENERATING...", severity="warning")
             return
 
         user_prompt = (
@@ -8314,19 +8646,19 @@ class C64StudioApp:
         ).strip()
         if not user_prompt:
             self.action_focus_agy_prompt()
-            self.notify("ENTER A PROMPT FOR ANTIGRAVITY CLI [⇧F12]")
+            self.notify(f"ENTER A PROMPT FOR {disp_name.upper()} [⇧F12]")
             return
 
-        st = self.agy.detect_cli()
+        st = self.agy.detect_cli(provider=prov)
         self._refresh_agy_badge(st)
         if not st.installed:
             self.switch_tab("tab-agy")
             self._write_agy_chat(
-                "⚠ Google Antigravity CLI (`agy`) was not detected on this machine.\n"
+                f"⚠ {disp_name} (`{prov}`) was not detected on this machine.\n"
                 f"  • Install Command : {st.install_command}\n"
-                "  • Opening the C64 Studio Antigravity Setup Wizard so you can auto-install in 1 click!"
+                "  • Opening the C64 Studio AI CLI Setup Wizard so you can auto-install or switch CLIs in 1 click!"
             )
-            self.notify("AGY CLI NOT FOUND — OPENING SETUP WIZARD", severity="warning")
+            self.notify(f"{tag} CLI NOT FOUND — OPENING SETUP WIZARD", severity="warning")
             self.action_open_agy_setup()
             return
 
@@ -8390,7 +8722,7 @@ class C64StudioApp:
 
         self._agy_busy = True
         self._agy_started_at = time.monotonic()
-        self._agy_status_base = f"AGY CONNECTING ({target_lang.upper()})"
+        self._agy_status_base = f"{tag} CONNECTING ({target_lang.upper()})"
         self._border_busy = True
         self._busy_phase = f"{self._agy_status_base} [0S]"
         self.btn_agy_send.configure(state=tk.DISABLED, text="... CONNECTING (0s)")
@@ -8401,8 +8733,8 @@ class C64StudioApp:
         self._draw_border_and_divider()
         self._draw_bottom_deck()
 
-        self._write_agy_chat(f"\n>>> YOU [{target_lang.upper()}]: {user_prompt}")
-        self._write_agy_chat("─── ANTIGRAVITY CLI LIVE STREAM ────────────────────────────────────────")
+        self._write_agy_chat(f"\n>>> YOU [{target_lang.upper()} -> {tag}]: {user_prompt}")
+        self._write_agy_chat(f"─── {disp_name.upper()} LIVE STREAM ────────────────────────────────────────")
 
         stream_accum: list[str] = []
         saw_delta = False
@@ -8416,7 +8748,7 @@ class C64StudioApp:
             self._agy_status_base = status_msg[:36]
             elapsed_s = max(0, int(time.monotonic() - self._agy_started_at))
             self._busy_phase = f"{self._agy_status_base} [{elapsed_s}S]"[:46]
-            short_btn = status_msg.replace("AGY ", "")[:14]
+            short_btn = status_msg.replace(f"{tag} ", "").replace("AGY ", "")[:14]
             self.btn_agy_send.configure(text=f"... {short_btn} ({elapsed_s}s)")
             self._set_agy_live_banner(
                 True,
@@ -8425,7 +8757,12 @@ class C64StudioApp:
             self._draw_bottom_deck()
             if (
                 status_msg != last_logged_status
-                and status_msg.startswith(("AGY CONNECTED", "AGY THINKING", "AGY TOOL:", "AGY TOOL BLOCKED:"))
+                and (
+                    "CONNECTED" in status_msg
+                    or "THINKING" in status_msg
+                    or "TOOL:" in status_msg
+                    or "TOOL BLOCKED" in status_msg
+                )
             ):
                 last_logged_status = status_msg
                 tail_char = self.agy_chat_text.get("end-2c", "end-1c")
@@ -8445,13 +8782,13 @@ class C64StudioApp:
                     self._preview_streaming_code_block(preview, target_tab_id=origin_tab_id)
 
         def _handle_file_edit_start(fpath: Path) -> None:
-            self._focus_file_for_cli_edit(fpath, source_tag="AGY EDIT")
+            self._focus_file_for_cli_edit(fpath, source_tag=f"{tag} EDIT")
 
         def _handle_file_write(fpath: Path, _content: Optional[str]) -> None:
             self._record_self_saved_file(fpath)
-            self._write_log(f"✓ Antigravity CLI updated file on disk: {fpath}")
+            self._write_log(f"✓ {disp_name} updated file on disk: {fpath}")
             if self.agy_auto_apply_var.get() and fpath.is_file():
-                self._sync_external_file(fpath, source_tag="AGY WRITE", allow_reload_tab_id=origin_tab_id)
+                self._sync_external_file(fpath, source_tag=f"{tag} WRITE", allow_reload_tab_id=origin_tab_id)
 
         def _finish(res: AgyPromptResult) -> None:
             self._agy_busy = False
@@ -8460,7 +8797,7 @@ class C64StudioApp:
             self.last_agy_result = res
             if self.root.winfo_exists():
                 self._set_agy_live_banner(False)
-                self.btn_agy_send.configure(state=tk.NORMAL, text="▶ ASK AGY")
+                self.btn_agy_send.configure(state=tk.NORMAL, text=f"▶ ASK {tag}")
                 self._draw_border_and_divider()
                 self._draw_bottom_deck()
 
@@ -8474,8 +8811,8 @@ class C64StudioApp:
             if not res.success and res.error_message:
                 self.switch_tab("tab-agy")
                 self._write_agy_chat(f"✗ Error: {res.error_message}")
-                self._write_log(f"✗ Antigravity CLI Error: {res.error_message}")
-                self.notify("ANTIGRAVITY CLI ERROR (SEE AI CONSOLE)", severity="error")
+                self._write_log(f"✗ {disp_name} Error: {res.error_message}")
+                self.notify(f"{tag} CLI ERROR (SEE AI CONSOLE)", severity="error")
                 return
 
             block = res.primary_code_block
@@ -8486,11 +8823,11 @@ class C64StudioApp:
                 if self.agy_auto_apply_var.get() and latest_file.is_file():
                     self._sync_external_file(
                         latest_file,
-                        source_tag="AGY CLI",
+                        source_tag=f"{tag} CLI",
                         allow_reload_tab_id=origin_tab_id,
                     )
                 else:
-                    self.notify(f"AGY UPDATED {latest_file.name.upper()}")
+                    self.notify(f"{tag} UPDATED {latest_file.name.upper()}")
             elif block is not None:
                 self.last_agy_code_block = block
                 line_cnt = len(block.code.splitlines())
@@ -8498,16 +8835,16 @@ class C64StudioApp:
                     f"✓ Extracted {block.studio_mode.upper()} code block ({line_cnt} lines)."
                 )
                 self._write_log(
-                    f"✓ Antigravity CLI generated {block.studio_mode.upper()} code ({line_cnt} lines)."
+                    f"✓ {disp_name} generated {block.studio_mode.upper()} code ({line_cnt} lines)."
                 )
                 if self.agy_auto_apply_var.get():
                     self._apply_extracted_code_block(block, target_tab_id=origin_tab_id)
                 else:
                     self.switch_tab("tab-agy")
-                    self.notify(f"AGY {block.studio_mode.upper()} CODE READY — CLICK APPLY")
+                    self.notify(f"{tag} {block.studio_mode.upper()} CODE READY — CLICK APPLY")
             else:
                 self.switch_tab("tab-agy")
-                self.notify("ANTIGRAVITY RESPONSE RECEIVED")
+                self.notify(f"{tag} RESPONSE RECEIVED")
 
         model_id = self.agy_model_var.get().strip() if hasattr(self, "agy_model_var") else ""
 
@@ -8523,6 +8860,7 @@ class C64StudioApp:
                     exec_mode=exec_mode,
                     model=model_id,
                     effort=effort_level,
+                    provider=prov,
                     on_delta=lambda d: self.root.after(0, lambda chunk=d: _handle_delta(chunk)),
                     on_status=lambda s: self.root.after(0, lambda st_msg=s: _handle_status(st_msg)),
                     on_file_write=lambda p, c: self.root.after(
@@ -8550,6 +8888,7 @@ class C64StudioApp:
                 exec_mode=exec_mode,
                 model=model_id,
                 effort=effort_level,
+                provider=prov,
                 on_delta=_handle_delta,
                 on_status=_handle_status,
                 on_file_write=_handle_file_write,
@@ -9114,6 +9453,12 @@ def main(argv: Optional[list[str]] = None) -> None:
     parser.add_argument("--port", type=int, default=80, help="C64U REST API port (default: 80)")
     parser.add_argument("--password", help="Optional C64U network password")
     parser.add_argument("--agy-bin", help="Optional explicit path to the Antigravity CLI (`agy`) binary")
+    parser.add_argument("--claude-bin", help="Optional explicit path to the Claude Code CLI (`claude`) binary")
+    parser.add_argument(
+        "--ai-provider",
+        choices=("agy", "claude"),
+        help="Active AI CLI provider ('agy' or 'claude')",
+    )
     args = parser.parse_args(argv)
 
     app = C64StudioApp(
@@ -9123,6 +9468,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         port=args.port,
         password=args.password,
         agy_bin=args.agy_bin,
+        claude_bin=args.claude_bin,
+        ai_provider=args.ai_provider,
     )
     if args.file:
         p = Path(args.file)

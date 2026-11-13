@@ -79,7 +79,7 @@ def test_c64_splash_screen_fade_and_immediate_ide(shared_root):
     # Splash overlay appears with expected Station 88 Retro branding and fades in then out
     assert app._splash_win is not None and app._splash_win.winfo_exists()
     assert app._splash_title_lbl.cget("text") == "C64 STUDIO"
-    assert app._splash_subtitle_lbl.cget("text") == "BY STATION 88 RETRO"
+    assert app._splash_subtitle_lbl.cget("text") == "BY STATION88 RETRO"
     assert app._splash_phase == "fade_in"
     assert app._splash_alpha == 0.0
 
@@ -100,6 +100,7 @@ def test_c64_splash_screen_fade_and_immediate_ide(shared_root):
 def test_tui_app_mount_and_fullscreen_toggle(tk_app):
     """Verify main studio widgets mount properly and F11 fullscreen toggles cleanly."""
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     assert app.py_text is not None
     assert app.asm_text is not None
     assert bool(app.py_text.cget("blockcursor")) is True
@@ -148,6 +149,7 @@ def test_filtered_directory_tree():
 def test_load_assembly_file_and_asm_editor_features(tk_app):
     """Verify loading .asm files, syntax highlighting, label outline, comment toggle, and ASM focus mode."""
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     asm_path = Path("game_dev/choplifter.asm")
     if asm_path.exists():
         app.load_project_file(asm_path)
@@ -217,6 +219,7 @@ def test_load_assembly_file_and_asm_editor_features(tk_app):
 
 def test_load_python_file(tk_app):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     py_path = Path("examples/rainbow_border.py")
     if py_path.exists():
         app.load_project_file(py_path)
@@ -228,6 +231,7 @@ def test_load_python_file(tk_app):
 
 def test_open_file_modal_composition(tk_app):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     modal = OpenFileModal(initial_path=Path.cwd())
     dlg = modal.show_tk(app, lambda _p: None)
     app.root.update_idletasks()
@@ -237,6 +241,7 @@ def test_open_file_modal_composition(tk_app):
 
 def test_refresh_connection_and_reset_actions(tk_app):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     btn_reset = app.menu_buttons.get("quick-btn-reset")
     assert btn_reset is not None
     assert any(b.key == "f8" and b.action == "reset_c64u" for b in app.BINDINGS)
@@ -247,6 +252,7 @@ def test_refresh_connection_and_reset_actions(tk_app):
 
 def test_export_tap_and_compile_d64_bindings(tk_app):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     assert any(b.key == "shift+f2" and b.action == "export_tap" for b in app.BINDINGS)
     assert any(b.key == "shift+f9" and b.action == "compile_d64" for b in app.BINDINGS)
     assert any(b.key == "f12" and b.action == "export_hyperload" for b in app.BINDINGS)
@@ -256,6 +262,7 @@ def test_export_tap_and_compile_d64_bindings(tk_app):
 
 def test_tiered_menu_bar_and_bindings(tk_app):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     assert app.menu_bar is not None
     for col_id in ("col-file", "col-build", "col-device", "col-gamedev", "col-help"):
         assert col_id in app.col_frames
@@ -329,6 +336,7 @@ def test_tiered_menu_bar_and_bindings(tk_app):
 def test_copyright_caution_modal(tk_app):
     """Verify CopyrightCautionModal displays mandated warning text and responds to proceed/cancel."""
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     result_holder = []
 
     modal = CopyrightCautionModal(filename="GAME.D64")
@@ -357,6 +365,7 @@ def test_disk_select_modal(tk_app):
     disk = read_d64(d64_bytes)
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     result_holder = []
     modal = DiskSelectModal(disk)
     assert len(modal.prg_entries) == 2
@@ -382,6 +391,7 @@ def test_decompile_d64_action_flow(tk_app, tmp_path):
     d64_file.write_bytes(d64_bytes)
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     app._decompile_file_flow(d64_file)
     app.root.update_idletasks()
 
@@ -398,6 +408,7 @@ def test_decompile_d64_action_flow(tk_app, tmp_path):
 def test_decompile_scope_modal_and_tap_flow(tk_app, tmp_path):
     """Verify DecompileScopeModal asks Loader / Main Game / Both and decompiles TAP into commented assembly."""
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     tap_path = Path("example_games/Burger Time.tap")
     if not tap_path.exists():
         pytest.skip("Burger Time.tap not found")
@@ -444,6 +455,7 @@ def test_kickass_update_modal_ui(tk_app):
     from c64u_bridge.compiler import KickAssVersionStatus
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     status = KickAssVersionStatus(
         installed_version="5.24",
         latest_version="5.25",
@@ -492,6 +504,7 @@ def _log(app):
 
 def test_starts_blank_with_nothing_to_build(tk_app):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     assert app.py_text.get("1.0", "end-1c") == ""
     assert app.asm_text.get("1.0", "end-1c") == ""
     assert app.loaded_file is None
@@ -503,6 +516,7 @@ def test_starts_blank_with_nothing_to_build(tk_app):
 
 def test_loading_a_prg_shows_it_and_does_not_run_it(tk_app, tmp_path, monkeypatch):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     ran = []
     monkeypatch.setattr(app.client, "run_prg", lambda p: ran.append(p))
     prg = tmp_path / "game.prg"
@@ -528,6 +542,7 @@ def test_loading_a_prg_shows_it_and_does_not_run_it(tk_app, tmp_path, monkeypatc
 
 def test_loading_a_definition_shows_it_without_transpiling(tk_app, tmp_path):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     bank = tmp_path / "bank.py"
     create_definition("sprites", bank)
     app.load_project_file(bank)
@@ -543,6 +558,7 @@ def test_f7_saves_the_edit_and_runs_the_right_tool(tk_app, tmp_path, monkeypatch
     from c64u_bridge.tui import UnsavedChangesModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     monkeypatch.setattr("c64u_bridge.tui.webbrowser.open", lambda *_: True)
     level = tmp_path / "lv.py"
     create_definition("levels", level)
@@ -560,6 +576,7 @@ def test_f7_saves_the_edit_and_runs_the_right_tool(tk_app, tmp_path, monkeypatch
 @pytest.mark.skipif(shutil.which("java") is None, reason="KickAssembler needs Java")
 def test_new_game_builds_and_runs_from_its_build_py(tk_app, tmp_path, monkeypatch):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     monkeypatch.setattr("c64u_bridge.tui.default_target_dir", lambda: tmp_path)
     ran = []
     monkeypatch.setattr(app.client, "run_prg", lambda p: ran.append(p))
@@ -585,6 +602,7 @@ def test_new_game_builds_and_runs_from_its_build_py(tk_app, tmp_path, monkeypatc
 @pytest.mark.skipif(shutil.which("java") is None, reason="KickAssembler needs Java")
 def test_new_definition_joins_the_game_it_is_created_in(tk_app, tmp_path, monkeypatch):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     monkeypatch.setattr("c64u_bridge.tui.default_target_dir", lambda: tmp_path)
     monkeypatch.setattr("c64u_bridge.tui.webbrowser.open", lambda *_: True)
     app._create_game("Pad")
@@ -605,6 +623,7 @@ def test_new_definition_joins_the_game_it_is_created_in(tk_app, tmp_path, monkey
 
 def test_build_file_written_for_a_folder_then_loaded(tk_app, tmp_path):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     create_definition("levels", tmp_path / "lv.py")
     (tmp_path / "main.asm").write_text("BasicUpstart2(s)\ns: rts\n", encoding="utf-8")
     app._create_build_file(tmp_path)
@@ -616,6 +635,7 @@ def test_build_file_written_for_a_folder_then_loaded(tk_app, tmp_path):
 
 def test_save_writes_what_is_loaded_and_asks_when_untitled(tk_app, tmp_path, monkeypatch):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     src = tmp_path / "tune.py"
     create_definition("song", src)
     app.load_project_file(src)
@@ -632,6 +652,7 @@ def test_save_writes_what_is_loaded_and_asks_when_untitled(tk_app, tmp_path, mon
 
 def test_a_failed_dma_run_reports_its_error(tk_app, tmp_path, monkeypatch):
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
 
     def refuse(_p):
         raise RuntimeError("no route to c64u")
@@ -652,6 +673,7 @@ def test_hub_launcher_and_sprite_studio_integration(tk_app, monkeypatch):
     from c64u_bridge import cli
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     assert "btn-sprite-studio" in app.menu_buttons
     assert "btn-validation-rep" in app.menu_buttons
 
@@ -683,6 +705,7 @@ def test_c64_studio_rename_and_multi_language_ide_modes(tk_app, tmp_path, monkey
     assert tui.C64PythonToAsmApp is c64_studio.C64StudioApp
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     assert "C64 STUDIO" in app.root.title()
     assert set(app.lang_buttons.keys()) == {"asm", "c", "py"}
 
@@ -829,6 +852,7 @@ def test_c64_studio_agy_setup_modal_and_prompt_workflow(tk_app, tmp_path):
     from c64u_bridge.c64_studio import AgySetupModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
 
     missing_status = AgyStatus(
         installed=False,
@@ -1062,6 +1086,7 @@ def test_c64_studio_live_streaming_and_external_cli_sync(tk_app, tmp_path, monke
     from c64u_bridge.server import emit_studio_bridge_event
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     installed_status = AgyStatus(
         installed=True,
         binary_path=tmp_path / "agy.exe",
@@ -1174,6 +1199,7 @@ def test_single_screen_editor_and_asm_toggle_workflow(tk_app, tmp_path):
     from c64u_bridge.agy_cli import AgyPromptResult, AgyStatus, ExtractedCodeBlock
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
 
     # 1. Single-screen workspace: only one unified pane in workspace_frame (no side-by-side split)
     assert len(app.workspace_frame.winfo_children()) == 1
@@ -1297,6 +1323,7 @@ def test_collapsible_menu_drawer_labels_toggle_and_clean_badges(tk_app, tmp_path
     from c64u_bridge.agy_cli import AgyStatus
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
 
     # Ensure clean default state even if earlier tests opened the menu
     app.close_menu_drawer()
@@ -1359,6 +1386,7 @@ def test_new_file_and_load_file_type_filters_flow(tk_app, tmp_path):
     from c64u_bridge.tui import NEW_SID_TEMPLATE, NewFileModal, OpenFileModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
 
     # 1. NewFileModal creates C, Py, ASM, and SID files directly in the IDE editor
     for choice, expected_mode, expected_kind, expected_tab in (
@@ -1425,6 +1453,7 @@ def test_compile_test_first_autofix_modal_and_send_to_c64u(tk_app, tmp_path, mon
     from c64u_bridge.tui import CompileErrorFixModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     monkeypatch.chdir(tmp_path)
 
     dma_runs: list[Path] = []
@@ -1521,6 +1550,7 @@ def test_game_generation_menu_and_modal(tk_app, tmp_path, monkeypatch):
     from c64u_bridge.tui import GameAssetGenModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     assert "btn-gd-ai-gen" in app.menu_buttons
     assert "btn-gd-ai-gen" in app.menu_columns["gamedev"]
 
@@ -1592,6 +1622,7 @@ def test_custom_and_manifest_build_py_directs_game_compilation(tk_app, tmp_path,
     from c64u_bridge.tui import CompileErrorFixModal, OpenFileModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     ran: list[Path] = []
     monkeypatch.setattr(app.client, "run_prg", lambda p: ran.append(p))
 
@@ -1663,6 +1694,7 @@ def test_build_options_tap_hypertap_and_d64(tk_app, tmp_path):
     from c64u_bridge.tui import BuildOutputModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     for bid in ("btn-build-options", "btn-build-tap", "btn-build-hypertap", "btn-build-d64", "btn-build-all"):
         assert bid in app.menu_buttons
         assert bid in app.menu_columns["build"]
@@ -1788,6 +1820,7 @@ def test_multi_file_tabs_agy_edits_star_indicator_and_save_prompt_before_compile
     from c64u_bridge.tui import UnsavedChangesModal
 
     app = tk_app
+    app.set_ai_provider("agy", detect=False, persist=False)
     game_dir = tmp_path / "tab_quest"
     game_dir.mkdir()
 
@@ -2052,6 +2085,254 @@ def test_agy_cli_model_effort_persistence_and_live_file_follow(shared_root, tmp_
     assert app2._active_tab == "tab-asm"
     assert "CLI light blue" in app2.asm_text.get("1.0", "end-1c")
     assert len(app2.asm_text.tag_ranges("agy_edit_line")) > 0
+
+
+def test_claude_cli_detection_mcp_and_stream_json_prompt(tmp_path):
+    """Verify AgyCliConnector detects Claude CLI, registers MCP, and parses Claude stream-json events."""
+    import io
+    import json
+    from unittest.mock import MagicMock, patch
+    from c64u_bridge.agy_cli import AgyCliConnector
+
+    fake_claude = tmp_path / "claude.exe"
+    fake_claude.write_text("fake", encoding="utf-8")
+    conn = AgyCliConnector(
+        agy_bin=str(tmp_path / "missing_agy.exe"),
+        claude_bin=str(fake_claude),
+        workspace_dir=tmp_path,
+    )
+    with patch("c64u_bridge.agy_cli.shutil.which", return_value=None), patch.object(
+        AgyCliConnector, "candidate_binary_paths", return_value=[]
+    ):
+        assert conn.find_binary("agy") is None
+        assert conn.find_binary("claude") == fake_claude.resolve()
+
+    def _fake_run(cmd, **_kwargs):
+        res = MagicMock()
+        res.returncode = 0
+        res.stderr = ""
+        if "--version" in cmd:
+            res.stdout = "2.1.318 (Claude Code)"
+        elif cmd[1:3] == ["mcp", "list"]:
+            res.stdout = "c64u-bridge: connected"
+        elif cmd[1:3] == ["mcp", "add"]:
+            assert "-s" in cmd and "user" in cmd
+            assert "-e" in cmd
+            res.stdout = "Added stdio MCP server c64u-bridge"
+        else:
+            res.stdout = ""
+        return res
+
+    with patch("c64u_bridge.agy_cli.shutil.which", return_value=None), patch.object(
+        AgyCliConnector, "candidate_binary_paths", return_value=[]
+    ), patch("c64u_bridge.agy_cli.subprocess.run", side_effect=_fake_run):
+        all_sts = conn.detect_all_clis()
+        assert all_sts["agy"].installed is False
+        assert all_sts["claude"].installed is True
+        assert all_sts["claude"].version == "2.1.318"
+        assert all_sts["claude"].provider == "claude"
+
+        ok_mcp, mcp_msg = conn.register_c64u_mcp(host="192.168.1.64", port=80, provider="claude")
+        assert ok_mcp is True
+        assert "c64u-bridge" in mcp_msg
+
+    # Verify Claude stream-json parsing & Write tool handling
+    written_file = tmp_path / "claude_demo.asm"
+    written_code = "BasicUpstart2(start)\n* = $0810\nstart:\n    inc $d020\n    jmp start\n"
+    written_file.write_text(written_code, encoding="utf-8")
+
+    claude_events = [
+        json.dumps({"type": "system", "subtype": "init", "session_id": "sess-9988aabb"}),
+        json.dumps({"type": "stream_event", "event": {"type": "message_start"}}),
+        json.dumps(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": "Here is your demo:\n```asm\nBasicUpstart2(start)\n```\n"},
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "name": "Write",
+                            "input": {"file_path": str(written_file), "content": written_code},
+                        }
+                    ]
+                },
+            }
+        ),
+        json.dumps({"type": "result", "subtype": "success", "is_error": False, "session_id": "sess-9988aabb"}),
+    ]
+
+    captured_cmd: list[str] = []
+
+    class _FakeProc:
+        def __init__(self):
+            self.stdout = io.StringIO("\n".join(claude_events) + "\n")
+            self.stderr = io.StringIO("")
+
+        def wait(self):
+            return 0
+
+    def _fake_popen(cmd, **_kwargs):
+        captured_cmd.extend(cmd)
+        return _FakeProc()
+
+    statuses: list[str] = []
+    with patch("c64u_bridge.agy_cli.subprocess.Popen", side_effect=_fake_popen):
+        res = conn.run_prompt(
+            "Cycle border color",
+            language_mode="asm",
+            exec_mode="accept-edits",
+            model="sonnet",
+            effort="high",
+            provider="claude",
+            on_status=statuses.append,
+        )
+
+    assert res.success is True
+    assert res.conversation_id == "sess-9988aabb"
+    assert "--permission-mode" in captured_cmd and "acceptEdits" in captured_cmd
+    assert "--verbose" in captured_cmd
+    assert "--include-partial-messages" in captured_cmd
+    assert any("CLAUDE CONNECTED" in s for s in statuses)
+    assert any("CLAUDE STREAMING CODE" in s for s in statuses)
+    assert written_file.resolve() in res.touched_files
+
+
+def test_c64_studio_provider_selection_between_agy_and_claude(shared_root, tmp_path, monkeypatch):
+    """Verify C64 Studio detects both agy and claude, auto-selects claude if only claude exists, and lets user switch."""
+    from unittest.mock import patch
+    from c64u_bridge.agy_cli import AgyStatus
+    from c64u_bridge.tui import AgySetupModal, C64StudioApp
+
+    settings_file = tmp_path / "studio_settings.json"
+    monkeypatch.setattr("c64u_bridge.env.get_studio_settings_path", lambda: settings_file)
+
+    fake_claude = tmp_path / "claude.exe"
+    fake_claude.write_text("fake", encoding="utf-8")
+    fake_agy = tmp_path / "agy.exe"
+    fake_agy.write_text("fake", encoding="utf-8")
+
+    # 1. When only claude is installed and no preference was saved, startup auto-selects claude
+    app = C64StudioApp(
+        root=shared_root,
+        skip_boot=True,
+        start_maximized=False,
+        agy_bin=str(tmp_path / "missing_agy.exe"),
+        claude_bin=str(fake_claude),
+    )
+    with patch("c64u_bridge.agy_cli.shutil.which", return_value=None), patch.object(
+        app.agy, "candidate_binary_paths", return_value=[]
+    ):
+        app.check_agy_cli_startup(full=False)
+
+    assert app._active_provider() == "claude"
+    assert "CLAUDE" in app.btn_agy_status.cget("text")
+    assert "ASK CLAUDE" in app.btn_agy_send.cget("text")
+    assert "CLAUDE" in app.menu_buttons["btn-agy-setup"].cget("text")
+    assert "CLAUDE" in app.menu_buttons["btn-agy-prompt"].cget("text")
+    assert "5:CLAUDE AI" == app.tab_buttons["tab-agy"].cget("text")
+    assert "CLAUDE SETUP" == app.btn_agy_setup_tab.cget("text")
+    assert "CLAUDE TERM" in app.btn_agy_term.cget("text")
+
+    # 2. User can switch between claude and agy in Setup Modal or toolbar and choice persists
+    st_agy = AgyStatus(installed=True, binary_path=fake_agy, version="1.6.0", provider="agy")
+    st_claude = AgyStatus(installed=True, binary_path=fake_claude, version="2.1.318", provider="claude")
+
+    def _detect_both(fetch_models=False, provider=None):
+        p = provider or app.agy.provider
+        return st_claude if p == "claude" else st_agy
+
+    with patch.object(app.agy, "detect_cli", side_effect=_detect_both):
+        app.action_open_agy_setup()
+        modal = app._last_agy_modal
+        assert isinstance(modal, AgySetupModal)
+        assert "claude: ✓ v2.1.318" in modal.provider_summary_lbl.cget("text")
+        assert "agy: ✓ v1.6.0" in modal.provider_summary_lbl.cget("text")
+
+        # Switch to agy via modal radio button
+        modal.provider_buttons["agy"].invoke()
+        shared_root.update_idletasks()
+        assert app._active_provider() == "agy"
+        assert "AGY v1.6.0" in app.btn_agy_status.cget("text")
+        assert "ASK AGY" in app.btn_agy_send.cget("text")
+        assert "AGY CLI SETUP" in app.menu_buttons["btn-agy-setup"].cget("text")
+        assert "PROMPT AGY" in app.menu_buttons["btn-agy-prompt"].cget("text")
+        assert "5:AGY AI" == app.tab_buttons["tab-agy"].cget("text")
+        assert "AGY SETUP" == app.btn_agy_setup_tab.cget("text")
+        assert "AGY TERM" in app.btn_agy_term.cget("text")
+
+        # Switch back to claude via modal radio button
+        modal.provider_buttons["claude"].invoke()
+        shared_root.update_idletasks()
+        assert app._active_provider() == "claude"
+        assert "CLAUDE v2.1.318" in app.btn_agy_status.cget("text")
+        assert "ASK CLAUDE" in app.btn_agy_send.cget("text")
+        assert "CLAUDE CLI SETUP" in app.menu_buttons["btn-agy-setup"].cget("text")
+        assert "PROMPT CLAUDE" in app.menu_buttons["btn-agy-prompt"].cget("text")
+        assert "5:CLAUDE AI" == app.tab_buttons["tab-agy"].cget("text")
+        assert "CLAUDE SETUP" == app.btn_agy_setup_tab.cget("text")
+        assert "CLAUDE TERM" in app.btn_agy_term.cget("text")
+        modal.close_btn.invoke()
+
+    saved = settings_file.read_text(encoding="utf-8")
+    assert '"ai_provider": "claude"' in saved
+
+
+def test_setup_bridge_configures_both_antigravity_and_claude(tmp_path, monkeypatch):
+    """Verify setup_bridge.py configures MCP for both Antigravity and Claude Code and persists provider choice."""
+    import json
+    import sys
+    from pathlib import Path
+    from unittest.mock import patch
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    import setup_bridge
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".gemini" / "config").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+    settings_path = tmp_path / "studio_settings.json"
+    monkeypatch.setenv("C64U_STUDIO_SETTINGS", str(settings_path))
+
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    (proj_dir / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+
+    with patch.object(setup_bridge, "is_frozen", return_value=False):
+        setup_bridge.save_configuration(
+            project_root=proj_dir,
+            host="192.168.1.64",
+            port=80,
+            password=None,
+            kickass_jar=None,
+            claude_detected=True,
+        )
+
+    agy_cfg = json.loads((proj_dir / "antigravity" / "antigravity.json").read_text(encoding="utf-8"))
+    claude_proj_cfg = json.loads((proj_dir / ".mcp.json").read_text(encoding="utf-8"))
+    claude_global_cfg = json.loads((fake_home / ".claude.json").read_text(encoding="utf-8"))
+    agy_global_cfg = json.loads((fake_home / ".gemini" / "config" / "mcp_config.json").read_text(encoding="utf-8"))
+
+    assert "c64u-bridge" in agy_cfg["mcpServers"]
+    assert "c64u-bridge" in claude_proj_cfg["mcpServers"]
+    assert "c64u-bridge" in claude_global_cfg["mcpServers"]
+    assert "c64u-bridge" in agy_global_cfg["mcpServers"]
+
+    setup_bridge.save_ai_provider_preference("claude")
+    saved_prefs = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved_prefs["ai_provider"] == "claude"
+
+
 
 
 

@@ -5,7 +5,7 @@ Game build tool: rebuild a whole game from its `build.py` manifest or custom `bu
 Supports two `build.py` styles seamlessly:
 1. Declarative `STEPS` manifest:
    Defines `STEPS = [(tool, path), ...]` (and optional `TITLE`) with paths relative to `build.py`.
-   Supported step tools: `"sprites"`, `"tileset"`, `"koala"`, `"song"`, `"levels"`, `"asm"`, `"c"`,
+   Supported step tools: `"sprites"`, `"tileset"`, `"isotiles"`, `"koala"`, `"song"`, `"levels"`, `"asm"`, `"c"`,
    `"py"`, and `"hyperload"`.
 2. Custom executable `build.py` script:
    Any Python build script without top-level `STEPS` (or with its own `if __name__ == "__main__":`
@@ -29,6 +29,7 @@ REPO_ROOT = TOOLS.parent
 SCRIPTS = {
     "sprites": ("sprites/sprite_tool.py", []),
     "tileset": ("charset/tileset_tool.py", []),
+    "isotiles": ("isotiles/iso_tool.py", []),
     "koala": ("bitmap/koala_tool.py", []),
     "song": ("sid/song_tool.py", ["--build"]),
     "levels": ("levels/level_tool.py", []),

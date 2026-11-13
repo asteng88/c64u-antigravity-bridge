@@ -42,6 +42,8 @@ GAME_TOOLS: dict[str, GameTool] = {
                  "Build a sprite bank file into KickAssembler data and a review page"),
         GameTool("tileset", "TILES + MAP", "tools/charset/tileset_tool.py", (".py",),
                  "Build a tileset file into a multicolor charset, tile/building tables, a map and a review page"),
+        GameTool("isotiles", "ISO TERRAIN", "tools/isotiles/iso_tool.py", (".py",),
+                 "Build an isometric terrain file into a multicolor charset, character lookup tables, a staggered map and a review page"),
         GameTool("koala", "KOALA SCREEN", "tools/bitmap/koala_tool.py", (".py",),
                  "Render a scene file into a Koala multicolor bitmap and a review page"),
         GameTool("song", "SONG → SID", "tools/sid/song_tool.py", (".py",),

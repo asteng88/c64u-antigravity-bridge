@@ -3,7 +3,7 @@ C64U Antigravity Bridge
 Connecting Google Antigravity to the Commodore 64 Ultimate (C64U) for real-time 6502 development.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 __author__ = "Andrew Thomas"
 
 from .client import C64UClient

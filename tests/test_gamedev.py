@@ -81,6 +81,20 @@ def test_tileset_tool_builds_charset_tiles_and_map(tmp_path):
     assert ".const T_ORE3" in asm and "map_tiles:" in asm and "map_objects:" in asm
 
 
+def test_iso_tool_builds_charset_lookup_tables_and_map(tmp_path):
+    path = project.create_definition("isotiles", tmp_path / "isle.py")
+    res = run_tool("isotiles", path)
+    assert res.ok, res.output
+    assert res.first(".html") == tmp_path / "isle_iso_review.html"
+    assert len((tmp_path / "isle_charset.bin").read_bytes()) == 2048
+    asm = (tmp_path / "isle_iso.asm").read_text(encoding="utf-8")
+    for name in (".const TR_SEA = 0", "terrain_flags:", "iso_chr:", "iso_col:", "iso_row_lo:", "iso_map:"):
+        assert name in asm, name
+    # iso_chr / iso_col are full 256-entry tables (q*64 + U*8 + L)
+    tables = asm.split("iso_chr:")[1].split("iso_row_lo:")[0]
+    assert tables.count("$") == 512
+
+
 def test_c64sim_renders_border_and_raster_irq(tmp_path):
     # sei; lda #$35; sta $01; lda #2; sta $d020; jmp *
     code = bytes([0x78, 0xA9, 0x35, 0x85, 0x01, 0xA9, 0x02, 0x8D, 0x20, 0xD0, 0x4C, 0x0A, 0xC0])
@@ -280,7 +294,7 @@ def _kernal_header(tap):
 # ---------------------------------------------------------------- projects
 
 
-@pytest.mark.parametrize("kind", ["sprites", "tileset", "koala", "levels"])
+@pytest.mark.parametrize("kind", ["sprites", "tileset", "isotiles", "koala", "levels"])
 def test_every_starter_file_is_recognised_and_builds(tmp_path, kind):
     path = project.create_definition(kind, tmp_path / "first_try.py")
     assert project.classify_file(path) == kind
@@ -309,7 +323,8 @@ def test_classify_tells_definitions_from_game_code(tmp_path):
                        ("game_dev/Heliscape/map/heliscape_map.py", "tileset"),
                        ("game_dev/Heliscape/map/heliscape_levels.py", "levels"),
                        ("game_dev/Heliscape/music/heliscape_theme.py", "song"),
-                       ("game_dev/Heliscape/heliscape.asm", "asm")]:
+                       ("game_dev/Heliscape/heliscape.asm", "asm"),
+                       ("game_dev/tornado/map/tornado_iso.py", "isotiles")]:
         assert project.classify_file(ROOT / path) == want, path
 
 

@@ -255,30 +255,26 @@ def person_set():
 
 
 def hook_set():
-    rows = [
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
-        "...........##...........",
+    """5 frames: cable 0, 4, 8, 12, 16 px long from the top row, hook below.
+
+    The game hangs frame n>>2 from the heli's centre, nudged down by n&3 px,
+    so the hook tip (last row) sits n + 4 px below the top for any rope
+    length n = 0..19 and the cable always starts under the heli's body.
+    """
+    cable = "...........##..........."
+    hook = [
         "..........####..........",
         ".........##..##.........",
         ".........##..##.........",
         ".............##.........",
         "..........####..........",
-        "........................",
-        "........................",
     ]
-    return [Sprite("HOOK", "WINCH", rows, mode="hr", color=1)]
+    out = []
+    for k in range(5):
+        rows = [cable] * (4 * k) + hook
+        rows += ["." * 24] * (21 - len(rows))
+        out.append(Sprite("HOOK", f"ROPE-{4 * k}", rows, mode="hr", color=1))
+    return out
 
 
 GROUPS = [

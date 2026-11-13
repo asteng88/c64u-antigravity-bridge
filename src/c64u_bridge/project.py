@@ -13,13 +13,14 @@ from typing import Optional
 from .gamedev import tools_root
 
 # kinds of .py file, each built by the game tool of the same name
-DEFINITION_KINDS = ("sprites", "tileset", "koala", "song", "levels")
+DEFINITION_KINDS = ("sprites", "tileset", "isotiles", "koala", "song", "levels")
 BUILD_ORDER = {kind: i for i, kind in enumerate(DEFINITION_KINDS)}
 
 KIND_LABELS = {
     "build": "GAME BUILD SCRIPT (BUILD.PY)",
     "sprites": "SPRITE BANK",
     "tileset": "TILES + MAP",
+    "isotiles": "ISO TERRAIN",
     "koala": "KOALA SCREEN",
     "song": "SID SONG",
     "sid": "SID MUSIC SOURCE (MOS 6581/8580 PSID)",
@@ -29,8 +30,8 @@ KIND_LABELS = {
     "asm": "6502 ASSEMBLY",
 }
 # where a new file of each kind goes inside a project
-KIND_FOLDERS = {"sprites": "sprites", "tileset": "map", "koala": "screens", "song": "music", "levels": "map"}
-KIND_FILES = {"sprites": "sprites_new.py", "tileset": "tiles_new.py", "koala": "screen_new.py",
+KIND_FOLDERS = {"sprites": "sprites", "tileset": "map", "isotiles": "map", "koala": "screens", "song": "music", "levels": "map"}
+KIND_FILES = {"sprites": "sprites_new.py", "tileset": "tiles_new.py", "isotiles": "iso_new.py", "koala": "screen_new.py",
               "song": "song_new.py", "levels": "levels_new.py"}
 
 NEW_ASM_TEMPLATE = """// ============================================================================
@@ -231,7 +232,64 @@ STEPS = [
 {steps}]
 '''
 
-_TEMPLATES = {"sprites": _SPRITES, "tileset": _TILESET, "koala": _KOALA, "song": _SONG, "levels": _LEVELS}
+_ISOTILES = '''"""
+{title} isometric terrain - build with F7: writes a charset, character lookup
+tables and a staggered isometric map, and opens a review page.
+
+32x16 pixel diamonds in staggered rows (odd rows shifted 16 px right).
+Pixels: "." $D021, "," $D022, "#" $D023, 0..7 colour RAM colour.
+surface(lx, ly) / deco(lx, ly): lx, ly = offset from the diamond's centre.
+Higher "elev" diamonds show cliff faces (left, right) over lower ones.
+"""
+TITLE = "{title}"
+BLACK, WHITE, RED, CYAN, PURPLE, GREEN, BLUE, YELLOW = range(8)
+BG = (6, 7, 0)      # $D021 sea blue, $D022 sand yellow, $D023 black
+ISO_W, ISO_H = 16, 64
+
+
+def water(lx, ly):
+    return CYAN if ly == 2.5 and -7 <= lx <= -1 else "."
+
+
+def sand(lx, ly):
+    return ","
+
+
+def grass(lx, ly):
+    return "#" if (lx, ly) in ((-5, 0.5), (7, -2.5)) else GREEN
+
+
+def tree(lx, ly):
+    if (lx / 9) ** 2 + ((ly + 4) / 3.5) ** 2 <= 1:
+        return GREEN if ly < -4 else "#"
+    if abs(lx) <= 1 and -1 <= ly <= 3:
+        return "#"
+    return None
+
+
+# (the first terrain also fills the map margins)
+TERRAINS = [
+    dict(name="SEA", elev=0, flags=0, surface=water, face=("#", "#")),
+    dict(name="SAND", elev=2, flags=1, surface=sand, face=(RED, "#")),
+    dict(name="GRASS", elev=4, flags=1, surface=grass, face=(RED, "#")),
+    dict(name="TREES", elev=4, flags=1, surface=grass, deco=tree, face=(RED, "#")),
+]
+
+
+def TERRAIN_AT(i, j):
+    """Terrain of diamond i in row j; its centre is at (32*i + 16*(j & 1), 8*j)."""
+    x, y = 32 * i + 16 * (j & 1), 8 * j
+    d = ((x - 256) / 200) ** 2 + ((y - 256) / 160) ** 2
+    if d < 0.35:
+        return "TREES" if (i + j) % 3 == 0 else "GRASS"
+    if d < 0.6:
+        return "GRASS"
+    if d < 0.85:
+        return "SAND"
+    return "SEA"
+'''
+
+_TEMPLATES = {"sprites": _SPRITES, "tileset": _TILESET, "isotiles": _ISOTILES, "koala": _KOALA, "song": _SONG, "levels": _LEVELS}
 
 
 def _top_level_names(source: str) -> set[str]:
@@ -262,6 +320,8 @@ def classify_source(source: str) -> str:
         return "song"
     if "TILES" in names:
         return "tileset"
+    if "TERRAINS" in names and "TERRAIN_AT" in names:
+        return "isotiles"
     if "compose" in names:
         return "koala"
     return "python"
