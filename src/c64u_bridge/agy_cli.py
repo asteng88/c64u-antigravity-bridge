@@ -207,6 +207,49 @@ def infer_prompt_language(user_prompt: str, fallback_mode: str = "asm") -> str:
     return fallback_mode
 
 
+GAME_PROJECT_STRUCTURE_GUIDANCE = (
+    "Game Project Structure (REQUIRED for multi-asset C64 games under `game_dev/<slug>/`):\n"
+    "Always organize games using the standard `tools/build/build_tool.py` layout:\n"
+    "- `game_dev/<slug>/build.py`: Declarative manifest (`TITLE = \"...\"` and `STEPS = [...]`) with steps:\n"
+    "  `(\"sprites\", \"sprites/<slug>_sprites.py\")`, `(\"tileset\", \"map/<slug>_map.py\")`, "
+    "`(\"song\", \"music/<slug>_theme.py\")`, `(\"koala\", \"loading/loading_scene.py\")`, "
+    "and `(\"asm\", \"game/<slug>.asm\")` (plus `(\"levels\", ...)` if needed).\n"
+    "- `game_dev/<slug>/sprites/<slug>_sprites.py`: Sprite bank definition for `tools/sprites/sprite_tool.py`.\n"
+    "- `game_dev/<slug>/map/<slug>_map.py`: Charset/tileset/map definition for `tools/charset/tileset_tool.py`.\n"
+    "- `game_dev/<slug>/music/<slug>_theme.py`: Song definition for `tools/sid/song_tool.py` "
+    "(`ASM = \"music.asm\"`, `INSTRUMENTS`, `PATTERNS`, `ORDERS`, `FILTER_CUTOFF`, `FILTER_ROUTING`).\n"
+    "- `game_dev/<slug>/loading/loading_scene.py`: Koala title screen for `tools/bitmap/koala_tool.py` (`OUTPUT = \"loading\"`).\n"
+    "- `game_dev/<slug>/game/<slug>.asm`: Main KickAssembler source (`BasicUpstart2(boot)`) importing generated "
+    "assets/constants BEFORE code references them, built via `python tools/build/build_tool.py game_dev/<slug>/build.py`.\n"
+    "- **CRITICAL 6510 Boot/IRQ Safety**: When banking out KERNAL (`$01 = #$35`), ALWAYS disable CIA1/CIA2 IRQs "
+    "(`lda #$7F; sta $DC0D; sta $DD0D; lda $DC0D; lda $DD0D`) and install `$FFFE/$FFFF` + `$FFFA/$FFFB` vectors "
+    "(e.g., an `rti` stub or raster IRQ) BEFORE `cli`, and set `$DD02 |= 3` before selecting VIC bank via `$DD00`."
+)
+
+
+def _is_game_project_prompt(
+    user_prompt: str,
+    language_mode: str = "asm",
+    active_file: Optional[Path] = None,
+) -> bool:
+    """Return True only when the request or active file is for a multi-asset C64 game project."""
+    if language_mode == "def":
+        return True
+    if active_file is not None:
+        parts_low = {p.lower() for p in active_file.parts}
+        if "game_dev" in parts_low or active_file.name.lower() == "build.py":
+            return True
+    low = (user_prompt or "").lower()
+    return bool(
+        re.search(
+            r"\b(game_dev|build\.py|full\s+game|new\s+game|build\s+(?:a|an|the|this)\s+[\w\s-]*game|"
+            r"create\s+(?:a|an|the)\s+[\w\s-]*game|make\s+(?:a|an|the)\s+[\w\s-]*game|"
+            r"arcade\s+game|platformer|shooter|shmup)\b",
+            low,
+        )
+    )
+
+
 def build_c64_prompt(
     user_prompt: str,
     language_mode: str = "asm",
@@ -270,6 +313,8 @@ def build_c64_prompt(
         lang_guidance,
         ide_fast_path,
     ]
+    if _is_game_project_prompt(stripped, language_mode=language_mode, active_file=active_file):
+        parts.append(GAME_PROJECT_STRUCTURE_GUIDANCE)
     if active_file is not None:
         parts.append(f"Active Workspace File: {active_file}")
     if include_code_context and current_code.strip():

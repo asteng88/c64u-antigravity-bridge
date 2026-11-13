@@ -1,0 +1,34 @@
+{
+ "instruments": [
+  {
+   "name": "lead",
+   "ad": "$16",
+   "sr": "$A8",
+   "steps": 2
+  },
+  {
+   "name": "bass",
+   "ad": "$05",
+   "sr": "$86",
+   "steps": 2
+  },
+  {
+   "name": "kick",
+   "ad": "$08",
+   "sr": "$00",
+   "steps": 5
+  },
+  {
+   "name": "snare",
+   "ad": "$07",
+   "sr": "$00",
+   "steps": 4
+  },
+  {
+   "name": "hat",
+   "ad": "$03",
+   "sr": "$00",
+   "steps": 2
+  }
+ ]
+}

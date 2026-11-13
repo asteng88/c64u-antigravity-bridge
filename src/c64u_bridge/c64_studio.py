@@ -8479,7 +8479,19 @@ class C64StudioApp:
                 return
 
             block = res.primary_code_block
-            if block is not None:
+            if res.touched_files:
+                if block is not None:
+                    self.last_agy_code_block = block
+                latest_file = res.touched_files[-1]
+                if self.agy_auto_apply_var.get() and latest_file.is_file():
+                    self._sync_external_file(
+                        latest_file,
+                        source_tag="AGY CLI",
+                        allow_reload_tab_id=origin_tab_id,
+                    )
+                else:
+                    self.notify(f"AGY UPDATED {latest_file.name.upper()}")
+            elif block is not None:
                 self.last_agy_code_block = block
                 line_cnt = len(block.code.splitlines())
                 self._write_agy_chat(
@@ -8493,16 +8505,6 @@ class C64StudioApp:
                 else:
                     self.switch_tab("tab-agy")
                     self.notify(f"AGY {block.studio_mode.upper()} CODE READY — CLICK APPLY")
-            elif res.touched_files:
-                latest_file = res.touched_files[-1]
-                if self.agy_auto_apply_var.get() and latest_file.is_file():
-                    self._sync_external_file(
-                        latest_file,
-                        source_tag="AGY CLI",
-                        allow_reload_tab_id=origin_tab_id,
-                    )
-                else:
-                    self.notify(f"AGY UPDATED {latest_file.name.upper()}")
             else:
                 self.switch_tab("tab-agy")
                 self.notify("ANTIGRAVITY RESPONSE RECEIVED")

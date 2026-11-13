@@ -21,7 +21,7 @@ When generating software for the Commodore 64 (MOS 6510 CPU / VIC-II / SID) on t
 * **6510 On-Chip Port Register (`$0001`)**:
   * `$37` (`%00110111`): BASIC ROM + Kernal ROM + I/O enabled (Default, ~38 KB RAM).
   * `$36` (`%00110110`): BASIC disabled (RAM mapped), Kernal + I/O enabled (~52 KB RAM).
-  * `$35` (`%00110101`): All ROMs disabled (RAM mapped), I/O enabled at `$D000-$DFFF` (~60 KB RAM). **Recommended for full-scale ML games and demoscene productions.**
+  * `$35` (`%00110101`): All ROMs disabled (RAM mapped), I/O enabled at `$D000-$DFFF` (~60 KB RAM). **Recommended for full-scale ML games and demoscene productions.** When using `$35`, **always** disable CIA1/CIA2 IRQs (`lda #$7F; sta $DC0D; sta $DD0D; lda $DC0D; lda $DD0D`) and install `$FFFE/$FFFF` + `$FFFA/$FFFB` handlers before `cli` (otherwise the first 60Hz CIA1 timer IRQ jumps into unmapped RAM and crashes to a blue screen).
   * `$34` (`%00110100`): Full 64 KB pure RAM (ROMs and I/O replaced by RAM).
 * **Zero Page (`$0000 - $00FF`)**:
   * `$00` / `$01`: 6510 CPU Direction & Port registers.
@@ -79,3 +79,15 @@ When generating software for the Commodore 64 (MOS 6510 CPU / VIC-II / SID) on t
 * **Non-Invasive Verification**:
   * Use `c64_inspect_screen` to verify text output and UI layouts without looking at the physical monitor.
   * Use `c64_read_memory` to check internal variable states and memory buffers.
+
+---
+
+## 6. Game Project Structure (`game_dev/<slug>/` — Games Only)
+When building a multi-asset C64 game (not single-file demos or utilities), **always** use the standard `tools/build/build_tool.py` project layout:
+* `game_dev/<slug>/build.py`: Declarative `TITLE` + `STEPS` manifest:
+  * `("sprites", "sprites/<slug>_sprites.py")` — `tools/sprites/sprite_tool.py`
+  * `("tileset", "map/<slug>_map.py")` — `tools/charset/tileset_tool.py`
+  * `("song", "music/<slug>_theme.py")` — `tools/sid/song_tool.py` (with `ASM = "music.asm"`)
+  * `("koala", "loading/loading_scene.py")` — `tools/bitmap/koala_tool.py` (`OUTPUT = "loading"`)
+  * `("asm", "game/<slug>.asm")` — Main KickAssembler entry (`BasicUpstart2(boot)`), importing generated `.const` asset files **before** code references them
+* Build & verify the full game with `python tools/build/build_tool.py game_dev/<slug>/build.py`.

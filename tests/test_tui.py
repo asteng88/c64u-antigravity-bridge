@@ -739,6 +739,13 @@ def test_agy_cli_connector_detection_install_mcp_and_prompt(tmp_path):
     p_c = build_c64_prompt("bounce a sprite", language_mode="c", current_code="int main(void) {}")
     assert "Oscar64" in p_c
     assert "```c" in p_c
+    assert "Game Project Structure" not in p_asm
+    assert "Game Project Structure" not in p_c
+
+    p_game = build_c64_prompt("Build a helicopter rescue game", language_mode="asm")
+    assert "Game Project Structure" in p_game
+    assert "game_dev/<slug>/build.py" in p_game
+    assert "game/<slug>.asm" in p_game
 
     p_py = build_c64_prompt("play sid tone", language_mode="py", current_code="border_color(0)")
     assert "Python-to-6502" in p_py
@@ -815,7 +822,7 @@ def test_agy_cli_connector_detection_install_mcp_and_prompt(tmp_path):
         assert "-p" in called_cmd
 
 
-def test_c64_studio_agy_setup_modal_and_prompt_workflow(tk_app):
+def test_c64_studio_agy_setup_modal_and_prompt_workflow(tk_app, tmp_path):
     """Verify AgySetupModal walkthrough and live Antigravity CLI prompting inside C64 Studio."""
     from unittest.mock import patch
     from c64u_bridge.agy_cli import AgyPromptResult, AgyStatus, ExtractedCodeBlock
@@ -883,6 +890,34 @@ def test_c64_studio_agy_setup_modal_and_prompt_workflow(tk_app):
         assert "0xD020" in app.py_text.get("1.0", "end-1c")
         assert "Extracted C code block" in app.agy_chat_text.get("1.0", "end-1c")
         assert "v1.5.2" in app.btn_agy_status.cget("text")
+
+    # Verify touched_files + code_blocks does NOT create a duplicate unnamed tab
+    disk_asm = tmp_path / "disk_game.asm"
+    disk_asm.write_text('BasicUpstart2(start)\n* = $0810\nstart:\n    rts\n', encoding="utf-8")
+    app.open_tabs.clear()
+    app.active_file_tab_id = None
+    app.loaded_file = None
+    app.py_text.delete("1.0", "end")
+    app.asm_text.delete("1.0", "end")
+    touched_result = AgyPromptResult(
+        success=True,
+        response_text="Updated disk_game.asm:\n```asm\n; snippet\n```",
+        stderr="",
+        return_code=0,
+        command=["agy", "-p", "..."],
+        code_blocks=[ExtractedCodeBlock(language_tag="asm", studio_mode="asm", code="; snippet\n")],
+        touched_files=[disk_asm],
+    )
+    with patch.object(app.agy, "detect_cli", return_value=installed_status), patch.object(
+        app.agy, "run_prompt", return_value=touched_result
+    ):
+        app.agy_auto_apply_var.set(True)
+        app.agy_prompt_var.set("Create disk_game.asm")
+        app.action_send_agy_prompt()
+        app.root.update_idletasks()
+        assert len(app.open_tabs) == 1
+        assert app.open_tabs[0].loaded_file == disk_asm.resolve()
+        assert "BasicUpstart2(start)" in app.asm_text.get("1.0", "end-1c")
 
     modal_ok = AgySetupModal(app.agy, installed_status)
     dlg_ok = modal_ok.show_tk(app)
