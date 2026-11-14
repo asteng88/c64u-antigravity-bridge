@@ -57,3 +57,6 @@ tools/oscar64/
 # Example programs and games
 example_games/
 
+
+# GAME CHECK reports (tools/gamecheck)
+*_check.txt

@@ -55,6 +55,10 @@ GAME_TOOLS: dict[str, GameTool] = {
                  "Rebuild a game from its build.py manifest (assets + KickAssembler)"),
         GameTool("hyperload", "HYPERLOAD TAPE", "tools/hyperload/hyperload_tool.py", (".prg",),
                  "Turn a PRG into a HYPERLOAD .tap: a fast loader with border stripes"),
+        GameTool("gamecheck", "GAME CHECK", "tools/gamecheck/game_check.py", (".prg",),
+                 "Run a game headless and report engine bugs: raster IRQ fighting a screen's mode, stuck SID "
+                 "voices, fine scroll wrapping without the screen moving",
+                 ("--frames", "1500")),
         GameTool("c64sim", "C64 SCREENSHOT", "tools/c64sim/c64sim.py", (".prg",),
                  "Run a PRG headless (VIC-II, raster IRQs, sprites) for 300 frames and save a screenshot",
                  ("--frames", "300", "--scale", "2")),

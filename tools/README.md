@@ -16,7 +16,8 @@ the machinery lives here.
 | `kickassembler/` | KickAssembler 5.x | `.asm` | `.prg` |
 | `sprites/` | `sprite_tool.py` | sprite bank `.py` (`GROUPS` of `Sprite` builders) | `sprites.asm`, review page, `--png` contact sheet |
 | `charset/` | `tileset_tool.py` | tileset `.py` (`TILES` 2x2-char art, `BLOCKS` multi-char buildings, `MAP`, `OBJECTS`) | `_charset.bin` (de-duplicated, bold font at codes 0-63), `_tiles.asm` (tile/block tables, map, start objects), review page |
-| `bitmap/` | `koala_tool.py` | scene `.py` (`compose(cv)` on a 160×100 canvas) | `.kla` Koala bitmap with the 3-colours-per-cell rule enforced, review page |
+| `isotiles/` | `iso_tool.py` | terrain `.py` (`TERRAINS` with surface/deco painters, `TERRAIN_AT`, optional `HEIGHT_AT`, `WALLS`/`WALLS_AT`, `EXTRA_ASM`) | `_charset.bin`, `_iso.asm` (character lookup tables + staggered half-diamond map), `_heights.asm`, `_extra.asm`, review page |
+| `bitmap/` | `koala_tool.py` | scene `.py` (`compose(cv)` on a 160×100 canvas, or 160×200 with `FULL_RES = True`) | `.kla` Koala bitmap with the 3-colours-per-cell rule enforced, review page |
 | `sid/` | `song_tool.py` | song `.py` (instruments, patterns, order lists) | `music_data.asm`, `music_config.asm`; with `--build` also `.prg`, register log and `.sid` |
 | `sid/` | `sid_player.asm` | – | 3-voice SID driver (wavetables, PWM, vibrato, hard restart) that songs compile for; `music_voice_off` lets a game take a voice for sound effects |
 | `sid/` | `make_psid.py` | music `.prg` | PSID v2 `.sid` |
@@ -24,7 +25,8 @@ the machinery lives here.
 | `c64sim/` | `c64sim.py` | `.prg` | headless C64 on top of `sim6502`: VIC-II rendered per raster line (text/bitmap modes, sprites, borders), raster IRQs, keyboard + joystick from an input script, memory pokes; PNG screenshots of chosen frames |
 | `hyperload/` | `hyperload_tool.py` | `.prg` with a SYS line, loading between `$0800` and `$D000` | HYPERLOAD `.tap`: fast loader with border stripes, about 2m for 45 KB against about 14m for a standard tape |
 | `levels/` | `level_tool.py` | level `.py` (`LEVELS` of dicts, `TABLES` of one-byte fields, `RECORDS` of variable-length byte lists, optional `CHECK`) | `_levels.asm` (`LEVEL_COUNT`, tables, pointer tables), `_levels_review.html` |
-| `build/` | `build_tool.py` | game `build.py` manifest (`STEPS`) | runs the asset tools in order, then KickAssembler; `--shot N` adds a headless screenshot. The studio runs the PRG on the C64U |
+| `gamecheck/` | `game_check.py` | `.prg` (+ optional `--input` script) | runs the game headless and reports engine bugs: a raster IRQ fighting a screen's mode, stuck SID voices, fine scroll wrapping without the screen moving; `<prg>_check.txt`, exit 1 on findings |
+| `build/` | `build_tool.py` | game `build.py` manifest (`STEPS`) | runs the asset tools in order, then KickAssembler; `--shot N` adds a headless screenshot, `--check N` runs `gamecheck` for N frames (input script `CHECK_INPUT` in `build.py`). The studio runs the PRG on the C64U |
 
 Each script's docstring documents its definition-file format; run any of them
 with `--help`.
@@ -37,3 +39,11 @@ with `--help`.
    review pages and remembers `.sid` files for **PLAY SID**.
 3. Register it in `GAME_TOOLS` in `src/c64u_bridge/gamedev.py`, add a menu
    button in `tui.py`, and add a test in `tests/test_gamedev.py`.
+
+## Before you ship a game
+
+Read `.agents/skills/c64-development/references/game_engine_pitfalls.md` (scroll pipeline, raster
+splits, switching screens with an IRQ running, double buffers, stuck sound, unreachable spawn points)
+and run `gamecheck` on the PRG with an input script that reaches the title, play, game over and level
+complete.
+

@@ -3087,11 +3087,13 @@ class C64StudioApp:
                     ("btn-sprite-studio", "SPRITE STUDIO[⇧F10]", self.action_open_sprite_studio),
                     ("btn-gd-sprites", "GEN SPRITE BANK   ", lambda: self.action_new_definition("sprites")),
                     ("btn-gd-tileset", "GEN TILES + MAP   ", lambda: self.action_new_definition("tileset")),
+                    ("btn-gd-isotiles", "GEN ISO TERRAIN   ", lambda: self.action_new_definition("isotiles")),
                     ("btn-gd-koala", "GEN TITLE SCREEN  ", lambda: self.action_new_definition("koala")),
                     ("btn-gd-song", "GEN SID SONG      ", lambda: self.action_new_definition("song")),
                     ("btn-gd-levels", "GEN LEVEL TABLES  ", lambda: self.action_new_definition("levels")),
                     ("btn-gd-build", "GEN BUILD.PY      ", self.action_new_build_file),
                     ("btn-gd-c64sim", "C64 SCREEN   [SIM]", self.action_gamedev_c64sim),
+                    ("btn-gd-check", "GAME CHECK   [SIM]", self.action_gamedev_check),
                     ("btn-gd-sim", "SID PROFILE  [SIM]", self.action_gamedev_sim),
                 ],
             ),
@@ -7765,6 +7767,10 @@ class C64StudioApp:
 
     def action_gamedev_c64sim(self) -> None:
         self._build_program(lambda prg: self._run_game_tool("c64sim", prg))
+
+    def action_gamedev_check(self) -> None:
+        """Build, then run the game headless and report engine bugs (tools/gamecheck)."""
+        self._build_program(lambda prg: self._run_game_tool("gamecheck", prg))
 
     def action_gamedev_sim(self) -> None:
         if self.last_sid_path and self.last_sid_path.is_file():

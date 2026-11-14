@@ -21,6 +21,7 @@ A comprehensive expert skill is installed in this workspace at:
   * [Memory Architecture, Banking & Zero Page](.agents/skills/c64-development/references/c64_memory_and_banking.md)
   * [KickAssembler v5.x Guide & Directives](.agents/skills/c64-development/references/kickassembler_guide.md)
   * [Python-to-6502 Transpiler Developer Reference](.agents/skills/c64-development/references/python_transpiler_guide.md)
+  * [Game Engine Pitfalls (read before writing a game)](.agents/skills/c64-development/references/game_engine_pitfalls.md)
 * **Production Templates**:
   * [Full 3-Voice SID Music & Tracker Engine](.agents/skills/c64-development/examples/sid_tracker_engine.asm)
   * [0-Cycle Jitter Stable Double-IRQ Template](.agents/skills/c64-development/examples/stable_double_irq.asm)

@@ -270,8 +270,8 @@ def test_tiered_menu_bar_and_bindings(tk_app):
     for hdr_id in ("menu-btn-file", "menu-btn-build", "menu-btn-device", "menu-btn-gamedev", "menu-btn-help"):
         assert hdr_id in app.col_headers
 
-    for btn_id in ("btn-gd-game", "btn-gd-build", "btn-gd-sprites", "btn-gd-tileset", "btn-gd-koala", "btn-gd-song",
-                   "btn-gd-levels", "btn-gd-c64sim", "btn-gd-sim"):
+    for btn_id in ("btn-gd-game", "btn-gd-build", "btn-gd-sprites", "btn-gd-tileset", "btn-gd-isotiles",
+                   "btn-gd-koala", "btn-gd-song", "btn-gd-levels", "btn-gd-c64sim", "btn-gd-check", "btn-gd-sim"):
         assert btn_id in app.menu_columns["gamedev"], f"Missing game dev button {btn_id}"
 
     for btn_id in (

@@ -5,6 +5,8 @@ hardware colour rule, and write a Koala Painter file.
 
 The canvas is 160x100 "art pixels": each is one multicolor pixel wide and two
 rasterlines tall (a 2x2 block on screen), so 4x4 art pixels make one 4x8 cell.
+A scene that sets FULL_RES = True gets the full 160x200 instead (one rasterline
+per art pixel, 4x8 art pixels per cell): twice the vertical detail.
 After composing, every cell keeps the background colour plus its three most
 used colours; other pixels move to the nearest allowed colour, and those cells
 are reported so they can be reviewed.
@@ -13,6 +15,7 @@ A scene is a Python file that defines:
   compose(cv)              draw onto the Canvas; return a dict of extras (or None)
 optional:
   OUTPUT                   base name for outputs (default: the scene file's stem)
+  FULL_RES                 True: 160x200 canvas (cv.w x cv.h) instead of 160x100
   BG                       background colour index (default 0, black)
   write_review(result)     build a review page; result has .final .raw .clashes
                            .extras .here .palette .bg and .hexrows(px)
@@ -131,12 +134,14 @@ def write_png(path, idx_rows, sx, sy):
 
 # ---------------------------------------------------------------- canvas
 class Canvas:
-    def __init__(self, bg=BLACK):
+    def __init__(self, bg=BLACK, full_res=False):
         self.bg = bg
-        self.px = [[bg] * W for _ in range(H)]
+        self.w, self.h = W, (200 if full_res else H)
+        self.cell_h = 8 if full_res else 4        # art pixel rows per 4x8 cell
+        self.px = [[bg] * self.w for _ in range(self.h)]
 
     def put(self, x, y, c):
-        if 0 <= x < W and 0 <= y < H and c is not None:
+        if 0 <= x < self.w and 0 <= y < self.h and c is not None:
             self.px[y][x] = c
 
     def blit(self, art, ox, oy, colours):
@@ -183,12 +188,13 @@ def big_text(cv, text, font, y0, scale, gap, ramp):
 
 # ---------------------------------------------------------------- C64 limits
 def fit_cells(cv):
-    """Keep BG + the 3 most-used colours per 4x8 cell (4x4 art pixels)."""
+    """Keep BG + the 3 most-used colours per 4x8 cell."""
     cells, clashes = [], []
-    for cy in range(H // 4):
+    ch = cv.cell_h
+    for cy in range(cv.h // ch):
         for cx in range(W // 4):
             counts = {}
-            for y in range(cy * 4, cy * 4 + 4):
+            for y in range(cy * ch, cy * ch + ch):
                 for x in range(cx * 4, cx * 4 + 4):
                     c = cv.px[y][x]
                     if c != cv.bg:
@@ -197,7 +203,7 @@ def fit_cells(cv):
             if len(counts) > 3:
                 clashes.append(cy * (W // 4) + cx)
                 allowed = keep + [cv.bg]
-                for y in range(cy * 4, cy * 4 + 4):
+                for y in range(cy * ch, cy * ch + ch):
                     for x in range(cx * 4, cx * 4 + 4):
                         c = cv.px[y][x]
                         if c not in allowed:
@@ -219,7 +225,7 @@ def koala(cv, cells):
         for n, c in ((1, c1), (2, c2), (3, c3)):
             code.setdefault(c, n)
         for line in range(8):
-            y = cy * 4 + line // 2
+            y = cy * cv.cell_h + line * cv.cell_h // 8
             byte = 0
             for k in range(4):
                 byte = (byte << 2) | code[cv.px[y][cx * 4 + k]]
@@ -237,7 +243,7 @@ def load_scene(path):
 
 def render(scene_path, png=None):
     scene = load_scene(scene_path)
-    cv = Canvas(getattr(scene, "BG", BLACK))
+    cv = Canvas(getattr(scene, "BG", BLACK), getattr(scene, "FULL_RES", False))
     extras = scene.compose(cv) or {}
     raw = [row[:] for row in cv.px]
     cells, clashes = fit_cells(cv)
@@ -246,7 +252,7 @@ def render(scene_path, png=None):
     out.write_bytes(koala(cv, cells))
     print(f"wrote {out.name}: {len(clashes)} of 1000 cells needed colour fixes")
     if png:
-        write_png(png, cv.px, 4, 4)
+        write_png(png, cv.px, 4, 4 if cv.h == H else 2)
     if hasattr(scene, "write_review"):
         result = types.SimpleNamespace(final=cv.px, raw=raw, clashes=clashes, extras=extras, here=here,
                                        palette=PALETTE, bg=cv.bg,

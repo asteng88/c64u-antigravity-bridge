@@ -6,6 +6,9 @@ Koala title picture (loading/loading.kla), then assembles game/tornado.asm
 (title screen + game) into game/tornado.prg.
 """
 TITLE = "TORNADO"
+# GAME CHECK input: title, briefing, flying in all directions, then a forced
+# game over (last life, exploding) and back to the title
+CHECK_INPUT = "check.json"
 STEPS = [
     ("sprites", "sprites/tornado_sprites.py"),
     ("isotiles", "map/tornado_iso.py"),

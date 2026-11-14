@@ -224,8 +224,10 @@ def CHECK(levels):
 _MANIFEST = '''"""
 {title} build manifest. F7 runs these steps in order, F5 also runs the game on the C64U.
 
-Each step is (tool, path relative to this file). Tools: sprites, tileset, koala, song,
-levels, asm, and hyperload (after asm, with the .prg as its path) for a fast tape.
+Each step is (tool, path relative to this file). Tools: sprites, tileset, isotiles, koala,
+song, levels, asm, and hyperload (after asm, with the .prg as its path) for a fast tape.
+Check the game for engine bugs with GAME CHECK (or build_tool.py --check 1500); set
+CHECK_INPUT = "check.json" to give it an input script that gets past your title screen.
 """
 TITLE = "{title}"
 STEPS = [

@@ -88,11 +88,46 @@ def test_iso_tool_builds_charset_lookup_tables_and_map(tmp_path):
     assert res.first(".html") == tmp_path / "isle_iso_review.html"
     assert len((tmp_path / "isle_charset.bin").read_bytes()) == 2048
     asm = (tmp_path / "isle_iso.asm").read_text(encoding="utf-8")
-    for name in (".const TR_SEA = 0", "terrain_flags:", "iso_chr:", "iso_col:", "iso_row_lo:", "iso_map:"):
+    for name in (".const TR_SEA = 0", "terrain_flags:", "iso_chr:", "char_col:", "iso_row_lo:", "iso_map:"):
         assert name in asm, name
-    # iso_chr / iso_col are full 256-entry tables (q*64 + U*8 + L)
-    tables = asm.split("iso_chr:")[1].split("iso_row_lo:")[0]
-    assert tables.count("$") == 512
+    # iso_chr: 4 pages (q*256 + U half*16 + L half), char_col: one colour per screen code
+    lines = asm.splitlines()
+    chr_rows = lines[lines.index("iso_chr:") + 1:lines.index("char_col:")]
+    col_rows = lines[lines.index("char_col:") + 1:lines.index("terrain_flags:")]
+    assert sum(r.count("$") for r in chr_rows) == 1024
+    assert sum(r.count("$") for r in col_rows if r.startswith("    .byte")) == 256
+
+
+def test_iso_tool_projects_heights_into_walls(tmp_path):
+    path = project.create_definition("isotiles", tmp_path / "hill.py")
+    src = path.read_text(encoding="utf-8")
+    src += '''
+
+def wall(lx, ly):
+    return "#"
+
+
+TERRAINS += [dict(name="WALL_L", elev=4, flags=1, surface=wall, face=("#", "#"), wall=True),
+             dict(name="WALL_R", elev=4, flags=1, surface=wall, face=("#", "#"), wall=True)]
+WALLS = ("WALL_L", "WALL_R")
+
+
+def HEIGHT_AT(i, j):
+    return 1 if (i, j) == (8, 32) else 0
+'''
+    path.write_text(src, encoding="utf-8")
+    res = run_tool("isotiles", path)
+    assert res.ok, res.output
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT / "tools" / "isotiles"))
+    import iso_tool
+    d = iso_tool.load_def(path)
+    names = [t["name"] for t in d.TERRAINS]
+    vis = iso_tool.project(d, {n: k for k, n in enumerate(names)})
+    wl, wr = names.index("WALL_L"), names.index("WALL_R")
+    # the raised diamond's own cell shows both walls; its top is drawn two rows up
+    assert vis[32][8] == [wl, wr]
+    assert vis[30][8] == [names.index(d.TERRAIN_AT(8, 32))] * 2
 
 
 def test_c64sim_renders_border_and_raster_irq(tmp_path):
@@ -372,3 +407,112 @@ def test_add_step_goes_before_assembly_and_only_once(tmp_path):
     text = manifest.read_text(encoding="utf-8")
     assert text.count("music/s.py") == 1
     assert text.index("music/s.py") < text.index('("asm", "g.asm")')
+
+
+# ---------------------------------------------------------------- game check
+_GAMECHECK_PROGRAMS = {
+    # a sound effect left on: voice 1 gated with sustain, then nothing touches it
+    "stuck": """
+BasicUpstart2(start)
+* = $0810
+start:  sei
+        lda #$0F
+        sta $D418
+        lda #$00
+        sta $D405
+        lda #$F0
+        sta $D406
+        lda #$20
+        sta $D401
+        lda #$11
+        sta $D404
+loop:   jmp loop
+""",
+    # main code shows a bitmap screen but the raster IRQ keeps writing text mode
+    "fight": """
+BasicUpstart2(start)
+* = $0810
+start:  sei
+        lda #<irq
+        sta $0314
+        lda #>irq
+        sta $0315
+        lda #$7F
+        sta $DC0D
+        lda #$80
+        sta $D012
+        lda #$1B
+        sta $D011
+        lda #$01
+        sta $D01A
+        cli
+        lda #$3B
+        sta $D011
+loop:   jmp loop
+irq:    lda #$1B
+        sta $D011
+        lda #$01
+        sta $D019
+        jmp $EA81
+""",
+    # fine scroll steps 2 px a frame and wraps, but the screen never moves
+    "jump": """
+BasicUpstart2(start)
+* = $0810
+start:  sei
+        ldx #$00
+loop:   lda $D012
+        cmp #250
+        bne loop
+w2:     lda $D012
+        cmp #250
+        beq w2
+        txa
+        clc
+        adc #$02
+        and #$07
+        tax
+        ora #$08
+        sta $D016
+        jmp loop
+""",
+    "clean": """
+BasicUpstart2(start)
+* = $0810
+start:  inc $D020
+        jmp start
+""",
+}
+
+
+def _build_gamecheck_prg(tmp_path, name):
+    src = tmp_path / f"{name}.asm"
+    src.write_text(_GAMECHECK_PROGRAMS[name], encoding="utf-8")
+    jar = ROOT / "tools" / "kickassembler" / "KickAss.jar"
+    subprocess.run(["java", "-jar", str(jar), src.name], cwd=tmp_path, capture_output=True, check=True)
+    prg = tmp_path / f"{name}.prg"
+    assert prg.is_file()
+    return prg
+
+
+@pytest.mark.skipif(shutil.which("java") is None, reason="KickAssembler needs Java")
+@pytest.mark.parametrize("name, finding", [
+    ("stuck", "STUCK SOUND voice 1"),
+    ("fight", "MODE FIGHT"),
+    ("jump", "SCROLL JUMP"),
+    ("clean", None),
+])
+def test_game_check_finds_engine_bugs(tmp_path, name, finding):
+    prg = _build_gamecheck_prg(tmp_path, name)
+    res = subprocess.run([sys.executable, str(ROOT / "tools" / "gamecheck" / "game_check.py"), str(prg),
+                          "--frames", "160"], capture_output=True, text=True)
+    report = (tmp_path / f"{name}_check.txt").read_text(encoding="utf-8")
+    if finding is None:
+        assert res.returncode == 0, res.stdout
+        assert "no problems found" in report
+    else:
+        assert res.returncode == 1, res.stdout
+        assert finding in report
+        for other in ("STUCK SOUND", "MODE FIGHT", "SCROLL JUMP"):
+            if other not in finding:
+                assert other not in report, report

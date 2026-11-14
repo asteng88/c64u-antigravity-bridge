@@ -91,3 +91,27 @@ When building a multi-asset C64 game (not single-file demos or utilities), **alw
   * `("koala", "loading/loading_scene.py")` — `tools/bitmap/koala_tool.py` (`OUTPUT = "loading"`)
   * `("asm", "game/<slug>.asm")` — Main KickAssembler entry (`BasicUpstart2(boot)`), importing generated `.const` asset files **before** code references them
 * Build & verify the full game with `python tools/build/build_tool.py game_dev/<slug>/build.py`.
+* Isometric terrain: use `("isotiles", "map/<slug>_iso.py")` (`tools/isotiles/iso_tool.py`) instead of the
+  tileset step. Full-resolution title art: `FULL_RES = True` in the Koala scene.
+* After building, run `python tools/build/build_tool.py game_dev/<slug>/build.py --check 1500` (or the studio's
+  **GAME CHECK**) and fix every finding.
+
+---
+
+## 7. Game Engine Rules (learned the hard way)
+Read [`game_engine_pitfalls.md`](../skills/c64-development/references/game_engine_pitfalls.md) before writing a game.
+* Scrolling: publish fine scroll, screen page ($D018) and sprite positions as ONE frame state and let the
+  raster IRQ apply them together; never apply fine scroll before the coarse-shifted screen is ready.
+* Coarse scroll by shifting the double-buffered screen and drawing only the new edge; rebuild colour RAM
+  from a colour map in the IRQ right after the page flip; measure the latest raster line the main loop
+  publishes on its heaviest frame and keep ~10 lines of margin.
+* Raster splits: write $D011 first in the handler, at a line that is never a bad line for any fine-scroll
+  value, and keep the VIC idle between the playfield and a HUD so no partial row shifts the HUD.
+* Switching screens (title, briefing, map, game over): switch the game's raster IRQ off ($D01A = 0) first,
+  on every path; re-install it when play starts.
+* Double buffering: banners, HUD rows and sprite pointers go to BOTH screen pages.
+* Sound: before any wait-for-fire loop or banner, finish or silence sound effects; play music only on the
+  screens meant for it and silence the SID when leaving them.
+* Spawn/target points: validate at build time that the player can reach them (movement clamps + pickup
+  tolerance + margin), that nothing hides them, and spread them with a stride coprime to the area count.
+* Verify with tools/gamecheck/game_check.py (studio GAME CHECK, build_tool --check N), then on VICE/hardware.

@@ -5,6 +5,7 @@ Game build tool: rebuild a whole game from its `build.py` manifest or custom `bu
 Supports two `build.py` styles seamlessly:
 1. Declarative `STEPS` manifest:
    Defines `STEPS = [(tool, path), ...]` (and optional `TITLE`) with paths relative to `build.py`.
+   Optional `CHECK_INPUT = "checks/play.json"`: input script used by `--check`.
    Supported step tools: `"sprites"`, `"tileset"`, `"isotiles"`, `"koala"`, `"song"`, `"levels"`, `"asm"`, `"c"`,
    `"py"`, and `"hyperload"`.
 2. Custom executable `build.py` script:
@@ -359,6 +360,9 @@ def main() -> None:
         help="also package a HYPERLOAD fast-loader turbo cassette (<stem>.hyper.tap)",
     )
     ap.add_argument("--d64", action="store_true", help="also package a 35-track 1541 floppy disk image (<stem>.d64)")
+    ap.add_argument("--check", type=int, metavar="FRAMES",
+                    help="after building, run tools/gamecheck on the PRG for this many frames (input script: "
+                         "CHECK_INPUT in build.py, a JSON file path relative to it); exit 1 if it finds problems")
     args = ap.parse_args()
     manifest = args.manifest.resolve()
     if not manifest.is_file():
@@ -426,6 +430,14 @@ def main() -> None:
         shot = prg.with_name(f"{prg.stem}_f{args.shot - 1}.png")
         if ok and shot.is_file():
             print(f"wrote {_rel_display(shot, here)}")
+    if args.check:
+        cmd = [str(prg), "--frames", str(args.check)]
+        check_input = getattr(m, "CHECK_INPUT", None)
+        if check_input:
+            cmd += ["--input", str((here / check_input).resolve())]
+        if not run(_py_cmd(TOOLS / "gamecheck" / "game_check.py", *cmd), prg.parent, "gamecheck", env=env):
+            print("game check found problems (see the [gamecheck] lines above)")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

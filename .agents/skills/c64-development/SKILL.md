@@ -19,6 +19,7 @@ Before writing code, consult the specialized reference manuals depending on the 
 * **[Memory Map, Banking & Zero-Page Architecture](./references/c64_memory_and_banking.md)**: Complete Zero-Page map, 6510 Port `$0001` banking (`$37`, `$36`, `$35`, `$34`), CIA 1 & CIA 2 registers, Kernal vectors, safe scratchpad pointers (`$FB-$FE`).
 * **[KickAssembler v5.x Practical Guide](./references/kickassembler_guide.md)**: Directives, `BasicUpstart2`, macros, pseudo-commands, compile-time trigonometric table scripting (`Math.sin()`), memory segments, and asset imports (`.import c64`, `.import binary`).
 * **[Python-to-6502 Transpiler Guide](./references/python_transpiler_guide.md)**: Supported Python subset, intrinsics (`poke`, `peek`, `border_color`, `background_color`, `wait_raster`, `clear_screen`, `print_str`, `sid_tone`, `asm`), and hybrid Python + ASM techniques.
+* **[Game Engine Pitfalls](./references/game_engine_pitfalls.md)**: Everything that went wrong building a full scrolling game (TORNADO) and the fix for each: the scroll frame pipeline, raster-split HUDs, switching screens with a raster IRQ running, double-buffer gotchas, stuck sound effects, unreachable spawn points, multicolor colour clashes, bitmap title art, isometric terrain, memory planning, KickAssembler errors and how to verify each in the simulator. **Read it before writing a game.**
 * **[Curated Core Documentation Index](./references/curated_core_docs.md)**: Reference-first routing into the repository's curated C64 manuals, including primary PDFs for VIC-II timing and 1541 behavior, KERNAL I/O, CIA, IEC, 6502 timing, SID, and memory mapping.
 
 ### Reference-First Rule
@@ -57,3 +58,26 @@ Verify output directly without disturbing the physical C64 display:
 * Call `c64_inspect_screen()` to read the current 40x25 screen matrix and color RAM formatted in ANSI text.
 * Call `c64_read_memory(address=0x0400, length=1000)` to examine raw screen or variable bytes.
 * Call `c64_send_keys(keys="...")` to simulate keyboard input for interactive applications.
+
+---
+
+## 4. Writing a Game: Must-Do Checklist
+
+Each item was a real bug in a finished game; the [pitfalls reference](./references/game_engine_pitfalls.md) has the symptom, cause and code for each.
+
+1. Scrolling: publish fine scroll, screen page ($D018) and sprite positions as ONE frame state and let the
+   raster IRQ apply them together; never apply fine scroll before the coarse-shifted screen is ready.
+2. Coarse scroll by shifting the double-buffered screen and drawing only the new edge; rebuild colour RAM
+   from a colour map in the IRQ right after the page flip; measure the latest raster line the main loop
+   publishes on its heaviest frame and keep ~10 lines of margin.
+3. Raster splits: write $D011 first in the handler, at a line that is never a bad line for any fine-scroll
+   value, and keep the VIC idle between the playfield and a HUD so no partial row shifts the HUD.
+4. Switching screens (title, briefing, map, game over): switch the game's raster IRQ off ($D01A = 0) first,
+   on every path; re-install it when play starts.
+5. Double buffering: banners, HUD rows and sprite pointers go to BOTH screen pages.
+6. Sound: before any wait-for-fire loop or banner, finish or silence sound effects; play music only on the
+   screens meant for it and silence the SID when leaving them.
+7. Spawn/target points: validate at build time that the player can reach them (movement clamps + pickup
+   tolerance + margin), that nothing hides them, and spread them with a stride coprime to the area count.
+8. Verify with tools/gamecheck/game_check.py (studio GAME CHECK, build_tool --check N), then on VICE/hardware.
+
